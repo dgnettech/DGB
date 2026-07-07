@@ -147,8 +147,11 @@ export default function LoginPage() {
           </button>
 
           <p className="mt-5 rounded-2xl bg-yellow-300/10 p-4 text-xs leading-5 text-yellow-50">
-            First admin accounts must be created or linked in Supabase by the owner. Members can only access DGB data after an admin links their Auth user to a member profile.
+            New setup? Use registration to create the first super admin. Members can register too, but they only see member data after their email is linked to a DGB member profile.
           </p>
+          <Link href="/register" className="mt-4 block text-center text-sm font-bold text-emerald-100 hover:text-white">
+            Register or bootstrap first admin
+          </Link>
         </form>
       </section>
     </main>

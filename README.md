@@ -19,6 +19,7 @@ This repository currently includes the Phase 1/2 foundation:
 
 - `/` — DGB MVP dashboard
 - `/login` — Supabase Auth login for admins and members
+- `/register` — first-admin bootstrap and member login registration
 - `/admin` — live admin portal for member/wallet creation, contributions, loan requests and ledger review
 - `/member` — live member portal for balances, loan requests, schedules, documents and profile-change requests
 - `/robots.txt` — blocks search indexing
@@ -69,6 +70,7 @@ Create a Supabase project and apply:
 ```text
 supabase/migrations/202607070001_dgb_mvp_schema.sql
 supabase/migrations/202607070002_dgb_live_operations.sql
+supabase/migrations/202607070003_dgb_bootstrap_loans.sql
 ```
 
 The migration creates the MVP tables:
@@ -94,6 +96,12 @@ Additional live-operation helpers:
 - Private Supabase Storage bucket: `member-documents`
 - RPC: `create_member_with_account(...)`
 - RPC: `capture_contribution(...)`
+- Auth trigger: first registered user becomes `super_admin`; later users default to `member`
+- RPC: `bootstrap_status()`
+- RPC: `link_member_to_user(...)`
+- RPC: `set_user_role(...)`
+- RPC: `approve_loan_request(...)`
+- RPC: `capture_repayment(...)`
 
 Security foundations included:
 
@@ -111,14 +119,12 @@ Security foundations included:
 
 ## Next build phase
 
-The live Supabase Auth shell, admin dashboard, member dashboard, document upload path and contribution capture RPC are now in place. The next implementation pass should add:
+The live Supabase Auth shell, first-admin bootstrap, admin dashboard, member dashboard, document upload path, member linking, contribution capture, loan approval and repayment capture are now in place. The next implementation pass should add:
 
-1. Bootstrap the first Supabase Auth admin user and matching `public.users` row.
-2. Loan approval workflow that generates loan rows, repayment schedules and disbursement transactions.
-3. Repayment capture RPC and admin screen.
-4. Signed document download links, PDF statements and agreements.
-5. Email notifications for approvals, repayment reminders and overdue alerts.
-6. CSV/XLSX exports and backup tooling.
+1. Signed document download links, PDF statements and agreements.
+2. Email notifications for approvals, repayment reminders and overdue alerts.
+3. CSV/XLSX exports and backup tooling.
+4. Reversal workflow for correcting posted ledger entries.
 
 ## Compliance reminder
 

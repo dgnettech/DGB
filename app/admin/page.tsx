@@ -1,7 +1,20 @@
 "use client";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { AlertTriangle, Banknote, Landmark, PiggyBank, Plus, ReceiptText, RefreshCw, UsersRound } from "lucide-react";
+import {
+  AlertTriangle,
+  Banknote,
+  CheckCircle2,
+  Landmark,
+  Link2,
+  type LucideIcon,
+  PiggyBank,
+  Plus,
+  ReceiptText,
+  RefreshCw,
+  UserCheck,
+  UsersRound,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AuthGate } from "@/components/dgb/auth-gate";
 import { DgbAppShell } from "@/components/dgb/app-shell";
@@ -22,6 +35,7 @@ import {
 } from "@/lib/dgb-live";
 
 type AdminData = {
+  users: DgbProfile[];
   members: MemberRow[];
   accounts: AccountRow[];
   balances: BalanceRow[];
@@ -33,6 +47,7 @@ type AdminData = {
 };
 
 const emptyData: AdminData = {
+  users: [],
   members: [],
   accounts: [],
   balances: [],
@@ -65,18 +80,19 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     setLoading(true);
     setError(null);
 
-    const [members, accounts, balances, transactions, loanRequests, loanProducts, loans, schedules] = await Promise.all([
+    const [users, members, accounts, balances, transactions, loanRequests, loanProducts, loans, schedules] = await Promise.all([
+      supabase.from("users").select("id,email,full_name,role,mfa_enabled").order("created_at", { ascending: true }).returns<DgbProfile[]>(),
       supabase.from("members").select("*").order("created_at", { ascending: false }).returns<MemberRow[]>(),
       supabase.from("accounts").select("*").order("created_at", { ascending: false }).returns<AccountRow[]>(),
       supabase.from("member_account_balances").select("*").returns<BalanceRow[]>(),
-      supabase.from("transactions").select("*").order("captured_at", { ascending: false }).limit(50).returns<TransactionRow[]>(),
-      supabase.from("loan_requests").select("*").order("submitted_at", { ascending: false }).limit(50).returns<LoanRequestRow[]>(),
+      supabase.from("transactions").select("*").order("captured_at", { ascending: false }).limit(75).returns<TransactionRow[]>(),
+      supabase.from("loan_requests").select("*").order("submitted_at", { ascending: false }).limit(75).returns<LoanRequestRow[]>(),
       supabase.from("loan_products").select("*").order("name").returns<LoanProductRow[]>(),
-      supabase.from("loans").select("*").order("created_at", { ascending: false }).limit(50).returns<LoanRow[]>(),
-      supabase.from("repayment_schedules").select("*").order("due_date", { ascending: true }).limit(100).returns<ScheduleRow[]>(),
+      supabase.from("loans").select("*").order("created_at", { ascending: false }).limit(75).returns<LoanRow[]>(),
+      supabase.from("repayment_schedules").select("*").order("due_date", { ascending: true }).limit(250).returns<ScheduleRow[]>(),
     ]);
 
-    const failed = [members, accounts, balances, transactions, loanRequests, loanProducts, loans, schedules].find((result) => result.error);
+    const failed = [users, members, accounts, balances, transactions, loanRequests, loanProducts, loans, schedules].find((result) => result.error);
     if (failed?.error) {
       setError(failed.error.message);
       setLoading(false);
@@ -84,6 +100,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     }
 
     setData({
+      users: users.data ?? [],
       members: members.data ?? [],
       accounts: accounts.data ?? [],
       balances: balances.data ?? [],
@@ -136,7 +153,58 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     }
 
     event.currentTarget.reset();
-    setMessage(`Created ${fullName} and wallet account ${accountNumber}.`);
+    setMessage(`Created ${fullName} and wallet account ${accountNumber}. If a login exists with that email, it was linked automatically.`);
+    await loadData();
+  }
+
+  async function linkMemberToUser(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+    const form = new FormData(event.currentTarget);
+    const memberId = String(form.get("member_id") ?? "");
+    const email = String(form.get("user_email") ?? "").trim();
+
+    if (!memberId || !email) {
+      setError("Select a member and enter the registered login email.");
+      return;
+    }
+
+    const { error: rpcError } = await supabase.rpc("link_member_to_user", {
+      p_member_id: memberId,
+      p_user_email: email,
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setMessage("Member profile linked to login user.");
+    await loadData();
+  }
+
+  async function setUserRole(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+    const form = new FormData(event.currentTarget);
+    const userId = String(form.get("user_id") ?? "");
+    const role = String(form.get("role") ?? "member");
+
+    const { error: rpcError } = await supabase.rpc("set_user_role", {
+      p_user_id: userId,
+      p_role: role,
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setMessage("User role updated.");
     await loadData();
   }
 
@@ -174,6 +242,32 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     await loadData();
   }
 
+  async function approveLoanRequest(request: LoanRequestRow) {
+    setMessage(null);
+    setError(null);
+    const account = data.accounts.find((item) => item.member_id === request.member_id && item.status === "active");
+    if (!account) {
+      setError("This member needs an active wallet account before the loan can be approved.");
+      return;
+    }
+
+    const { error: rpcError } = await supabase.rpc("approve_loan_request", {
+      p_request_id: request.id,
+      p_account_id: account.id,
+      p_reference: `DGB-LOAN-${request.id.slice(0, 8).toUpperCase()}`,
+      p_start_date: new Date().toISOString().slice(0, 10),
+      p_notes: "Approved from DGB admin dashboard.",
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    setMessage("Loan request approved. Loan, disbursement transaction and repayment schedule were created.");
+    await loadData();
+  }
+
   async function rejectLoanRequest(requestId: string) {
     setMessage(null);
     setError(null);
@@ -191,6 +285,43 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     await loadData();
   }
 
+  async function captureRepayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+    const form = new FormData(event.currentTarget);
+    const loanId = String(form.get("loan_id") ?? "");
+    const amountCents = parseMoneyToCents(form.get("amount"));
+    const reference = String(form.get("reference") ?? "").trim();
+    const memo = String(form.get("memo") ?? "").trim();
+    const loan = data.loans.find((item) => item.id === loanId);
+    const account = loan ? data.accounts.find((item) => item.member_id === loan.member_id && item.status === "active") : null;
+
+    if (!loan || !account || !amountCents || !reference) {
+      setError("Select an open loan, enter a positive repayment amount, and add a reference.");
+      return;
+    }
+
+    const { error: rpcError } = await supabase.rpc("capture_repayment", {
+      p_loan_id: loan.id,
+      p_account_id: account.id,
+      p_amount_cents: amountCents,
+      p_reference: reference,
+      p_memo: memo || null,
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setMessage(`Captured repayment of ${formatMoney(amountCents)}.`);
+    await loadData();
+  }
+
+  const openLoans = data.loans.filter((loan) => ["active", "overdue", "approved"].includes(loan.status));
+
   return (
     <div className="px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -199,7 +330,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
             <p className="text-xs font-black uppercase tracking-[0.28em] text-emerald-200">Admin command centre</p>
             <h1 className="mt-3 text-4xl font-black tracking-[-0.055em] sm:text-5xl">Live DGB fund operations</h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">
-              Manage members, wallets, contributions and loan requests directly against Supabase. Financial movements are captured through server-side database functions so ledger rows remain immutable and auditable.
+              Manage members, logins, wallets, contributions, loan approvals and repayments directly against Supabase. Financial movements are captured through server-side database functions so ledger rows remain immutable and auditable.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <button type="button" onClick={loadData} className="inline-flex items-center gap-2 rounded-full bg-emerald-400 px-5 py-3 text-sm font-black text-slate-950">
@@ -227,25 +358,75 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard icon={PiggyBank} label="Available cash" value={formatMoney(metrics.availableCash)} detail="Credits less debits in the ledger" />
-          <MetricCard icon={UsersRound} label="Members" value={String(data.members.length)} detail="Active and pending DGB members" />
+          <MetricCard icon={UsersRound} label="Members" value={String(data.members.length)} detail={`${data.users.length} registered login users`} />
           <MetricCard icon={Landmark} label="Loans outstanding" value={formatMoney(metrics.outstanding)} detail="Schedule amount due less paid" />
           <MetricCard icon={ReceiptText} label="Arrears" value={formatMoney(metrics.arrears)} detail="Past-due unpaid schedule rows" />
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-2">
+        <section className="grid gap-6 xl:grid-cols-3">
           <Panel title="Create member and wallet" subtitle="Creates a protected member row and linked DGB wallet account.">
-            <form onSubmit={createMember} className="grid gap-3 sm:grid-cols-2">
+            <form onSubmit={createMember} className="grid gap-3">
               <Field name="member_number" label="Member number" placeholder="DGB-0001" />
               <Field name="account_number" label="Account number" placeholder="DGB-0001-WALLET" />
               <Field name="full_name" label="Full name" placeholder="Member full name" required />
               <Field name="email" label="Email" placeholder="member@example.com" type="email" required />
               <Field name="phone" label="Phone" placeholder="+27..." />
-              <button className="mt-6 inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:mt-auto" type="submit">
+              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950" type="submit">
                 <Plus className="h-4 w-4" /> Create member
               </button>
             </form>
           </Panel>
 
+          <Panel title="Link member login" subtitle="Connects a registered login email to an existing member profile.">
+            <form onSubmit={linkMemberToUser} className="grid gap-3">
+              <label className="block text-sm font-black text-slate-200">
+                Member
+                <select name="member_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                  <option value="">Select member</option>
+                  {data.members.map((member) => (
+                    <option key={member.id} value={member.id} className="bg-slate-950">
+                      {member.full_name} · {member.user_id ? "linked" : "not linked"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Field name="user_email" label="Registered login email" placeholder="member@example.com" type="email" required />
+              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-black text-slate-950" type="submit">
+                <Link2 className="h-4 w-4" /> Link login
+              </button>
+            </form>
+          </Panel>
+
+          <Panel title="Set user role" subtitle="Only super admins can promote finance admins or viewers.">
+            <form onSubmit={setUserRole} className="grid gap-3">
+              <label className="block text-sm font-black text-slate-200">
+                Login user
+                <select name="user_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                  <option value="">Select user</option>
+                  {data.users.map((user) => (
+                    <option key={user.id} value={user.id} className="bg-slate-950">
+                      {user.full_name} · {user.email} · {user.role.replace("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm font-black text-slate-200">
+                Role
+                <select name="role" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                  <option value="member" className="bg-slate-950">Member</option>
+                  <option value="viewer" className="bg-slate-950">Viewer</option>
+                  <option value="finance_admin" className="bg-slate-950">Finance admin</option>
+                  <option value="super_admin" className="bg-slate-950">Super admin</option>
+                </select>
+              </label>
+              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-yellow-300 px-5 text-sm font-black text-slate-950" type="submit">
+                <UserCheck className="h-4 w-4" /> Update role
+              </button>
+            </form>
+          </Panel>
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-2">
           <Panel title="Capture contribution" subtitle="Posts an immutable contribution transaction and contribution record atomically.">
             <form onSubmit={captureContribution} className="grid gap-3 sm:grid-cols-2">
               <label className="block text-sm font-black text-slate-200 sm:col-span-2">
@@ -270,16 +451,42 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
               </button>
             </form>
           </Panel>
+
+          <Panel title="Capture repayment" subtitle="Applies payment to the oldest unpaid schedule rows and posts repayment ledger entries.">
+            <form onSubmit={captureRepayment} className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
+                Open loan
+                <select name="loan_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                  <option value="">Select loan</option>
+                  {openLoans.map((loan) => (
+                    <option key={loan.id} value={loan.id} className="bg-slate-950">
+                      {memberName(loan.member_id, data.members)} · {formatMoney(loan.principal_cents)} · {loan.status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Field name="amount" label="Amount" placeholder="1000.00" required />
+              <Field name="reference" label="Payment reference" placeholder="EFT-REPAY-001" required />
+              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
+                Memo
+                <textarea name="memo" placeholder="Optional note" className="mt-2 min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none" />
+              </label>
+              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
+                <CheckCircle2 className="h-4 w-4" /> Capture repayment
+              </button>
+            </form>
+          </Panel>
         </section>
 
         <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
           <Panel title="Members and balances" subtitle="Balances are calculated from member_account_balances, not typed manually.">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-sm">
+              <table className="w-full min-w-[840px] text-left text-sm">
                 <thead className="text-xs uppercase tracking-[0.18em] text-slate-500">
                   <tr>
                     <th className="px-3 py-3">Member</th>
                     <th className="px-3 py-3">Contact</th>
+                    <th className="px-3 py-3">Login</th>
                     <th className="px-3 py-3">Account</th>
                     <th className="px-3 py-3">Balance</th>
                     <th className="px-3 py-3">Status</th>
@@ -289,10 +496,12 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                   {data.members.map((member) => {
                     const account = data.accounts.find((item) => item.member_id === member.id);
                     const balance = data.balances.find((item) => item.member_id === member.id)?.balance_cents ?? 0;
+                    const linkedUser = data.users.find((user) => user.id === member.user_id);
                     return (
                       <tr key={member.id}>
                         <td className="px-3 py-4 font-black text-white">{member.full_name}<br /><span className="text-xs font-bold text-slate-500">{member.member_number}</span></td>
                         <td className="px-3 py-4 text-slate-300">{member.email}<br />{member.phone ?? "—"}</td>
+                        <td className="px-3 py-4 text-slate-300">{linkedUser ? <Pill status={linkedUser.role} /> : <span className="text-slate-500">Not linked</span>}</td>
                         <td className="px-3 py-4 text-slate-300">{account?.account_number ?? "No wallet yet"}</td>
                         <td className="px-3 py-4 font-black text-emerald-200">{formatMoney(balance)}</td>
                         <td className="px-3 py-4"><Pill status={member.status} /></td>
@@ -304,7 +513,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
             </div>
           </Panel>
 
-          <Panel title="Loan requests" subtitle="Members submit requests; finance admins review and process them.">
+          <Panel title="Loan requests" subtitle="Approve creates a loan, disbursement transaction and schedule.">
             <div className="space-y-3">
               {data.loanRequests.length === 0 ? <Empty label="No loan requests yet." /> : null}
               {data.loanRequests.map((request) => (
@@ -319,9 +528,14 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                   <p className="mt-3 text-sm leading-6 text-slate-300">{request.purpose}</p>
                   <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
                   {request.status === "pending" ? (
-                    <button type="button" onClick={() => rejectLoanRequest(request.id)} className="mt-3 rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
-                      Reject request
-                    </button>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => approveLoanRequest(request)} className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100">
+                        Approve + generate schedule
+                      </button>
+                      <button type="button" onClick={() => rejectLoanRequest(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
+                        Reject request
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               ))}
@@ -408,7 +622,7 @@ function Field({ label, name, placeholder, type = "text", required = false }: { 
   );
 }
 
-function MetricCard({ icon: Icon, label, value, detail }: { icon: typeof PiggyBank; label: string; value: string; detail: string }) {
+function MetricCard({ icon: Icon, label, value, detail }: { icon: LucideIcon; label: string; value: string; detail: string }) {
   return (
     <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-5">
       <Icon className="h-6 w-6 text-emerald-200" />
