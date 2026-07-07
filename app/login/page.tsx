@@ -7,7 +7,7 @@ import { AlertTriangle, ArrowRight, Landmark, LockKeyhole, ShieldCheck } from "l
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { isAdminRole, type DgbProfile } from "@/lib/dgb-live";
 
-const ADMIN_USERNAME_EMAIL = "admin@dgb.local";
+const ADMIN_USERNAME_EMAIL = "admin@dgbank.co.za";
 
 function resolveLoginIdentifier(value: string) {
   const login = value.trim().toLowerCase();
