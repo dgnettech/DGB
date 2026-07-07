@@ -7,10 +7,17 @@ import { AlertTriangle, ArrowRight, Landmark, LockKeyhole, ShieldCheck } from "l
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { isAdminRole, type DgbProfile } from "@/lib/dgb-live";
 
+const ADMIN_USERNAME_EMAIL = "admin@dgb.local";
+
+function resolveLoginIdentifier(value: string) {
+  const login = value.trim().toLowerCase();
+  return login === "admin" ? ADMIN_USERNAME_EMAIL : login;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-  const [email, setEmail] = useState("");
+  const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -39,7 +46,7 @@ export default function LoginPage() {
     setBusy(true);
     setMessage(null);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email: resolveLoginIdentifier(login), password });
     if (error) {
       setMessage(error.message);
       setBusy(false);
@@ -105,18 +112,18 @@ export default function LoginPage() {
             <LockKeyhole className="h-7 w-7" />
           </div>
           <h2 className="mt-6 text-3xl font-black tracking-[-0.04em]">Log in</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-400">Use your DGB member or admin email and password.</p>
+          <p className="mt-2 text-sm leading-6 text-slate-400">Use your DGB username or email and password.</p>
 
-          <label className="mt-6 block text-sm font-black text-slate-200" htmlFor="email">Email</label>
+          <label className="mt-6 block text-sm font-black text-slate-200" htmlFor="login">Username or email</label>
           <input
-            id="email"
-            type="email"
-            autoComplete="email"
+            id="login"
+            type="text"
+            autoComplete="username"
             required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            value={login}
+            onChange={(event) => setLogin(event.target.value)}
             className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none ring-emerald-300/0 transition placeholder:text-slate-500 focus:border-emerald-300/30 focus:ring-4 focus:ring-emerald-300/10"
-            placeholder="member@example.com"
+            placeholder="admin or member@example.com"
           />
 
           <label className="mt-4 block text-sm font-black text-slate-200" htmlFor="password">Password</label>
