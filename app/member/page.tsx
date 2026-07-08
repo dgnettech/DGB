@@ -270,7 +270,7 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
           <AlertTriangle className="h-8 w-8 text-yellow-200" />
           <h1 className="mt-5 text-3xl font-black tracking-[-0.04em]">Member profile pending</h1>
           <p className="mt-4 text-sm leading-7">
-            Your Auth account exists, but it is not yet linked to a DGB member record. Ask a finance admin to create a member profile and set its `user_id` to your Auth user id.
+            Your login exists, but it is not linked to a DGB member profile yet. Ask a finance admin to open Admin → Pending member logins, then create a member profile for this login or link it to an existing member.
           </p>
           <button type="button" onClick={loadData} className="mt-6 inline-flex items-center gap-2 rounded-full bg-yellow-300 px-5 py-3 text-sm font-black text-slate-950">
             <RefreshCw className="h-4 w-4" /> Check again
