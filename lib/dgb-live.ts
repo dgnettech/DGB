@@ -130,6 +130,17 @@ export type DocumentRow = {
   uploaded_at: string;
 };
 
+export type ProfileChangeRequestRow = {
+  id: string;
+  member_id: string;
+  requested_changes: Record<string, unknown>;
+  status: string;
+  submitted_at: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_notes: string | null;
+};
+
 export type NotificationRow = {
   id: string;
   title: string;
@@ -187,4 +198,25 @@ export function statusClassName(status: string) {
 
 export function sanitizeFileName(fileName: string) {
   return fileName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").slice(0, 120);
+}
+
+export function downloadCsv(fileName: string, headers: string[], rows: Array<Array<string | number | null | undefined>>) {
+  if (typeof document === "undefined") return;
+
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = sanitizeFileName(fileName.endsWith(".csv") ? fileName : `${fileName}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value: string | number | null | undefined) {
+  const text = String(value ?? "");
+  if (!/[",\n\r]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
 }

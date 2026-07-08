@@ -1,7 +1,7 @@
 "use client";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { AlertTriangle, ArrowRight, Bell, FileUp, HandCoins, Percent, RefreshCw, UserCog, WalletCards } from "lucide-react";
+import { AlertTriangle, ArrowRight, Bell, FileDown, FileUp, HandCoins, Percent, RefreshCw, UserCog, WalletCards } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AuthGate } from "@/components/dgb/auth-gate";
 import { DgbAppShell } from "@/components/dgb/app-shell";
@@ -9,6 +9,7 @@ import {
   type AccountRow,
   type BalanceRow,
   type DocumentRow,
+  downloadCsv,
   formatMoney,
   type InterestEarningRow,
   type LoanRequestRow,
@@ -140,6 +141,10 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
   const interestEarned = useMemo(() => data.interestEarnings.reduce((total, row) => total + Number(row.interest_earned_cents ?? 0), 0), [data.interestEarnings]);
   const outstanding = useMemo(() => data.schedules.reduce((total, row) => total + Math.max(row.amount_due_cents - row.paid_cents, 0), 0), [data.schedules]);
   const nextPayment = useMemo(() => data.schedules.find((row) => row.paid_cents < row.amount_due_cents), [data.schedules]);
+  const primaryAccount = data.accounts[0] ?? null;
+  const offersReady = data.loanRequests.filter((request) => request.status === "approved").length;
+  const activeLoans = data.loans.filter((loan) => ["active", "overdue"].includes(loan.status));
+  const uploadedDocumentKinds = new Set(data.documents.map((document) => document.kind));
 
   async function submitLoanRequest(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -209,6 +214,27 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
 
     setMessage("Loan offer declined. You can submit a new request if you want different terms.");
     await loadData();
+  }
+
+  function downloadMemberStatement() {
+    if (!data.member) {
+      setError("A linked member profile is required before downloading a statement.");
+      return;
+    }
+
+    const rows = [...data.transactions]
+      .sort((left, right) => left.captured_at.localeCompare(right.captured_at))
+      .map((transaction) => [
+        transaction.captured_at,
+        transaction.kind.replace("_", " "),
+        transaction.reference,
+        transaction.direction,
+        formatMoney(transaction.amount_cents),
+        transaction.memo,
+      ]);
+
+    downloadCsv(`${data.member.member_number}-statement-${new Date().toISOString().slice(0, 10)}.csv`, ["Date", "Type", "Reference", "Direction", "Amount", "Memo"], rows);
+    setMessage("Downloaded your recent DGB statement CSV.");
   }
 
   async function submitProfileChange(event: React.FormEvent<HTMLFormElement>) {
@@ -314,9 +340,14 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
               <h1 className="text-4xl font-black tracking-[-0.055em] sm:text-5xl">Welcome{data.member ? `, ${data.member.full_name}` : ""}</h1>
               <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">View your own DGB balance, contributions, loan requests, repayment schedules, documents and notifications. All data is filtered by Supabase RLS.</p>
             </div>
-            <button type="button" onClick={loadData} className="inline-flex items-center gap-2 rounded-full bg-emerald-400 px-5 py-3 text-sm font-black text-slate-950">
-              <RefreshCw className="h-4 w-4" /> Refresh
-            </button>
+            <div className="flex flex-wrap gap-3">
+              <button type="button" onClick={downloadMemberStatement} className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-black text-slate-950">
+                <FileDown className="h-4 w-4" /> Statement CSV
+              </button>
+              <button type="button" onClick={loadData} className="inline-flex items-center gap-2 rounded-full bg-emerald-400 px-5 py-3 text-sm font-black text-slate-950">
+                <RefreshCw className="h-4 w-4" /> Refresh
+              </button>
+            </div>
           </div>
         </section>
 
@@ -329,6 +360,29 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
           <MetricCard icon={Percent} label="Interest earned" value={formatMoney(interestEarned)} detail="Your share of lending-pool interest" />
           <MetricCard icon={HandCoins} label="Outstanding" value={formatMoney(outstanding)} detail="Total unpaid schedule amount" />
           <MetricCard icon={Bell} label="Next payment" value={nextPayment ? formatMoney(nextPayment.amount_due_cents - nextPayment.paid_cents) : "—"} detail={nextPayment ? shortDate(nextPayment.due_date) : "No payment due"} />
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+          <Panel title="Account passport" subtitle="Bank-style quick reference for your DGB wallet and readiness.">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <InfoTile label="Member number" value={data.member?.member_number ?? "Waiting for profile"} />
+              <InfoTile label="Wallet account" value={primaryAccount?.account_number ?? "No wallet linked yet"} />
+              <InfoTile label="Account status" value={primaryAccount?.status ?? data.member?.status ?? "Pending"} />
+              <InfoTile label="Active loans" value={`${activeLoans.length}`} />
+            </div>
+          </Panel>
+
+          <Panel title="Banking controls you can see" subtitle="The member portal mirrors core banking trust patterns: statements, documents, approvals and RLS privacy.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <InfoTile label="Statement export" value={`${data.transactions.length} recent rows`} />
+              <InfoTile label="ID document" value={uploadedDocumentKinds.has("id_document") ? "On file" : "Not uploaded"} />
+              <InfoTile label="Offers ready" value={`${offersReady}`} />
+            </div>
+            <div className="mt-4 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-4 text-sm leading-6 text-slate-300">
+              <p className="font-black text-emerald-100">Two-step lending control</p>
+              <p className="mt-1">Finance can price a custom offer, but the loan only activates and disburses after you accept the terms.</p>
+            </div>
+          </Panel>
         </section>
 
         <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
@@ -530,6 +584,15 @@ function MetricCard({ icon: Icon, label, value, detail }: { icon: typeof WalletC
       <p className="mt-4 text-sm font-bold text-slate-400">{label}</p>
       <p className="mt-1 text-3xl font-black tracking-[-0.04em] text-white">{value}</p>
       <p className="mt-3 text-xs leading-5 text-slate-500">{detail}</p>
+    </div>
+  );
+}
+
+function InfoTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+      <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">{label}</p>
+      <p className="mt-2 break-words text-sm font-black text-white">{value}</p>
     </div>
   );
 }

@@ -4,6 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   Banknote,
   CheckCircle2,
+  ClipboardCheck,
+  FileDown,
   Landmark,
   Link2,
   type LucideIcon,
@@ -21,6 +23,8 @@ import {
   type AccountRow,
   type BalanceRow,
   type DgbProfile,
+  type DocumentRow,
+  downloadCsv,
   formatMoney,
   type InterestEarningRow,
   type LoanInterestMethod,
@@ -29,6 +33,7 @@ import {
   type MemberRow,
   parseMoneyToCents,
   parsePercent,
+  type ProfileChangeRequestRow,
   type ScheduleRow,
   shortDate,
   statusClassName,
@@ -45,6 +50,8 @@ type AdminData = {
   loanRequests: LoanRequestRow[];
   loans: LoanRow[];
   schedules: ScheduleRow[];
+  documents: DocumentRow[];
+  profileChangeRequests: ProfileChangeRequestRow[];
 };
 
 const emptyData: AdminData = {
@@ -57,6 +64,8 @@ const emptyData: AdminData = {
   loanRequests: [],
   loans: [],
   schedules: [],
+  documents: [],
+  profileChangeRequests: [],
 };
 
 type AdminSection = "overview" | "members" | "money" | "loans" | "ledger";
@@ -92,7 +101,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     setLoading(true);
     setError(null);
 
-    const [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loans, schedules] = await Promise.all([
+    const [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loans, schedules, documents, profileChangeRequests] = await Promise.all([
       supabase.from("users").select("id,email,full_name,role,mfa_enabled").order("created_at", { ascending: true }).returns<DgbProfile[]>(),
       supabase.from("members").select("*").order("created_at", { ascending: false }).returns<MemberRow[]>(),
       supabase.from("accounts").select("*").order("created_at", { ascending: false }).returns<AccountRow[]>(),
@@ -102,9 +111,11 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       supabase.from("loan_requests").select("*").order("submitted_at", { ascending: false }).limit(75).returns<LoanRequestRow[]>(),
       supabase.from("loans").select("*").order("created_at", { ascending: false }).limit(75).returns<LoanRow[]>(),
       supabase.from("repayment_schedules").select("*").order("due_date", { ascending: true }).limit(250).returns<ScheduleRow[]>(),
+      supabase.from("documents").select("*").order("uploaded_at", { ascending: false }).limit(150).returns<DocumentRow[]>(),
+      supabase.from("profile_change_requests").select("*").order("submitted_at", { ascending: false }).limit(75).returns<ProfileChangeRequestRow[]>(),
     ]);
 
-    const failed = [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loans, schedules].find((result) => result.error);
+    const failed = [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loans, schedules, documents, profileChangeRequests].find((result) => result.error);
     if (failed?.error) {
       setError(failed.error.message);
       setLoading(false);
@@ -121,6 +132,8 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       loanRequests: loanRequests.data ?? [],
       loans: loans.data ?? [],
       schedules: schedules.data ?? [],
+      documents: documents.data ?? [],
+      profileChangeRequests: profileChangeRequests.data ?? [],
     });
     setLoading(false);
   }, [supabase]);
@@ -254,6 +267,25 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     await loadData();
   }
 
+  async function reviewProfileChange(requestId: string, decision: "approved" | "rejected") {
+    setMessage(null);
+    setError(null);
+
+    const { error: rpcError } = await supabase.rpc("review_profile_change_request", {
+      p_request_id: requestId,
+      p_decision: decision,
+      p_notes: decision === "approved" ? "Approved from DGB admin control room." : "Rejected from DGB admin control room.",
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    setMessage(decision === "approved" ? "Profile change approved and applied." : "Profile change rejected and audited.");
+    await loadData();
+  }
+
   async function captureContribution(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage(null);
@@ -381,16 +413,65 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     await loadData();
   }
 
+  function downloadLedgerCsv() {
+    downloadCsv(
+      `DGB-ledger-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Date", "Member", "Kind", "Reference", "Direction", "Amount", "Memo"],
+      data.transactions.map((transaction) => [
+        transaction.captured_at,
+        memberName(transaction.member_id, data.members),
+        transaction.kind.replace("_", " "),
+        transaction.reference,
+        transaction.direction,
+        formatMoney(transaction.amount_cents),
+        transaction.memo,
+      ]),
+    );
+    setMessage("Downloaded the recent ledger review file.");
+  }
+
   const openLoans = data.loans.filter((loan) => ["active", "overdue", "approved"].includes(loan.status));
   const pendingLoanRequests = data.loanRequests.filter((request) => request.status === "pending");
+  const offersAwaitingAcceptance = data.loanRequests.filter((request) => request.status === "approved");
+  const pendingOfferExposure = offersAwaitingAcceptance.reduce((total, request) => total + request.requested_amount_cents, 0);
+  const pendingProfileChanges = data.profileChangeRequests.filter((request) => request.status === "pending");
+  const membersMissingIdentity = data.members.filter((member) => !member.id_passport_number || !member.next_of_kin_name || !member.next_of_kin_phone);
+  const membersWithoutIdDocument = data.members.filter((member) => !data.documents.some((document) => document.member_id === member.id && document.kind === "id_document"));
   const linkedMemberCount = data.members.filter((member) => member.user_id).length;
-  const pendingActionCount = pendingMemberLogins.length + pendingLoanRequests.length;
+  const pendingActionCount = pendingMemberLogins.length + pendingLoanRequests.length + pendingProfileChanges.length + metrics.arrearsCount;
+  const liquidityAfterOffers = metrics.availableCash - pendingOfferExposure;
+  const controlChecks = [
+    {
+      label: "Daily cash position",
+      value: formatMoney(metrics.availableCash),
+      detail: "Uses the full account-balance view, not only recent transactions.",
+      tone: metrics.availableCash >= 0 ? "clear" : "critical",
+    },
+    {
+      label: "Offers waiting for member acceptance",
+      value: `${offersAwaitingAcceptance.length} · ${formatMoney(pendingOfferExposure)}`,
+      detail: `Cash after all open offers would be ${formatMoney(liquidityAfterOffers)}.`,
+      tone: liquidityAfterOffers >= 0 ? "clear" : "critical",
+    },
+    {
+      label: "Repayment arrears",
+      value: `${metrics.arrearsCount} schedule${metrics.arrearsCount === 1 ? "" : "s"} · ${formatMoney(metrics.arrears)}`,
+      detail: "Overdue unpaid instalments for finance follow-up.",
+      tone: metrics.arrearsCount === 0 ? "clear" : "critical",
+    },
+    {
+      label: "Member KYC/document readiness",
+      value: `${membersMissingIdentity.length} profile gap${membersMissingIdentity.length === 1 ? "" : "s"} · ${membersWithoutIdDocument.length} ID file gap${membersWithoutIdDocument.length === 1 ? "" : "s"}`,
+      detail: "Mimics bank onboarding checks before larger lending exposure.",
+      tone: membersMissingIdentity.length === 0 && membersWithoutIdDocument.length === 0 ? "clear" : "attention",
+    },
+  ] as const;
   const sectionAlertCounts: Record<AdminSection, number> = {
     overview: pendingActionCount,
-    members: pendingMemberLogins.length,
+    members: pendingMemberLogins.length + membersMissingIdentity.length,
     money: 0,
-    loans: pendingLoanRequests.length,
-    ledger: 0,
+    loans: pendingLoanRequests.length + offersAwaitingAcceptance.length,
+    ledger: metrics.arrearsCount,
   };
 
   return (
@@ -424,7 +505,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
         {error ? <Notice tone="error" message={error} /> : null}
 
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard icon={PiggyBank} label="Available cash" value={formatMoney(metrics.availableCash)} detail="Ledger credits less debits" />
+          <MetricCard icon={PiggyBank} label="Available cash" value={formatMoney(metrics.availableCash)} detail="Full wallet-balance view" />
           <MetricCard icon={UsersRound} label="Members linked" value={`${linkedMemberCount}/${data.members.length}`} detail={`${pendingMemberLogins.length} pending login${pendingMemberLogins.length === 1 ? "" : "s"}`} />
           <MetricCard icon={Landmark} label="Loans outstanding" value={formatMoney(metrics.outstanding)} detail={`${openLoans.length} open loan${openLoans.length === 1 ? "" : "s"}`} />
           <MetricCard icon={Percent} label="Interest distributed" value={formatMoney(metrics.interestDistributed)} detail="Credited to funding members" />
@@ -460,54 +541,122 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
         </nav>
 
         {activeSection === "overview" ? (
-          <section className="grid gap-5 xl:grid-cols-[1fr_0.78fr]">
-            <Panel title="Start here" subtitle="The admin panel now shows the next actions first. Choose a row to jump to the right workspace.">
-              <div className="space-y-3">
-                <button type="button" onClick={() => setActiveSection("members")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
-                  <span>
-                    <span className="block font-black text-white">Pending member logins</span>
-                    <span className="mt-1 block text-sm text-slate-400">Create a member profile or link a login to an existing member.</span>
-                  </span>
-                  <span className="rounded-full bg-yellow-300 px-3 py-1 text-sm font-black text-slate-950">{pendingMemberLogins.length}</span>
-                </button>
-                <button type="button" onClick={() => setActiveSection("loans")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
-                  <span>
-                    <span className="block font-black text-white">Loan requests awaiting review</span>
-                    <span className="mt-1 block text-sm text-slate-400">Approve with a rate, or reject with an audit trail.</span>
-                  </span>
-                  <span className="rounded-full bg-yellow-300 px-3 py-1 text-sm font-black text-slate-950">{pendingLoanRequests.length}</span>
-                </button>
-                <button type="button" onClick={() => setActiveSection("money")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
-                  <span>
-                    <span className="block font-black text-white">Capture money movement</span>
-                    <span className="mt-1 block text-sm text-slate-400">Post contributions and loan repayments through protected RPCs.</span>
-                  </span>
-                  <Banknote className="h-5 w-5 text-emerald-200" />
-                </button>
-              </div>
-            </Panel>
+          <div className="space-y-5">
+            <section className="grid gap-5 xl:grid-cols-[1fr_0.78fr]">
+              <Panel title="Start here" subtitle="The admin panel now shows the next actions first. Choose a row to jump to the right workspace.">
+                <div className="space-y-3">
+                  <button type="button" onClick={() => setActiveSection("members")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
+                    <span>
+                      <span className="block font-black text-white">Pending member logins</span>
+                      <span className="mt-1 block text-sm text-slate-400">Create a member profile or link a login to an existing member.</span>
+                    </span>
+                    <span className="rounded-full bg-yellow-300 px-3 py-1 text-sm font-black text-slate-950">{pendingMemberLogins.length}</span>
+                  </button>
+                  <button type="button" onClick={() => setActiveSection("loans")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
+                    <span>
+                      <span className="block font-black text-white">Loan requests awaiting review</span>
+                      <span className="mt-1 block text-sm text-slate-400">Send a custom offer, or reject with an audit trail.</span>
+                    </span>
+                    <span className="rounded-full bg-yellow-300 px-3 py-1 text-sm font-black text-slate-950">{pendingLoanRequests.length}</span>
+                  </button>
+                  <button type="button" onClick={() => setActiveSection("loans")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
+                    <span>
+                      <span className="block font-black text-white">Offers waiting for members</span>
+                      <span className="mt-1 block text-sm text-slate-400">Approved offers are not disbursed until accepted.</span>
+                    </span>
+                    <span className="rounded-full bg-yellow-300 px-3 py-1 text-sm font-black text-slate-950">{offersAwaitingAcceptance.length}</span>
+                  </button>
+                  <button type="button" onClick={() => setActiveSection("money")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
+                    <span>
+                      <span className="block font-black text-white">Capture money movement</span>
+                      <span className="mt-1 block text-sm text-slate-400">Post contributions and loan repayments through protected RPCs.</span>
+                    </span>
+                    <Banknote className="h-5 w-5 text-emerald-200" />
+                  </button>
+                </div>
+              </Panel>
 
-            <Panel title="Operating rules" subtitle="Plain-English guardrails for the finance admin.">
-              <div className="space-y-3 text-sm leading-6 text-slate-300">
-                <div className="rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-4">
-                  <p className="font-black text-emerald-100">Ledger-first</p>
-                  <p className="mt-1">Balances are calculated from transactions. Do not edit balances directly.</p>
+              <Panel title="Operating rules" subtitle="Plain-English guardrails for the finance admin.">
+                <div className="space-y-3 text-sm leading-6 text-slate-300">
+                  <div className="rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-4">
+                    <p className="font-black text-emerald-100">Ledger-first</p>
+                    <p className="mt-1">Balances are calculated from transactions. Do not edit balances directly.</p>
+                  </div>
+                  <div className="rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4 text-yellow-50">
+                    <p className="font-black">Before real-money use</p>
+                    <p className="mt-1">Confirm member agreements, POPIA controls, accounting/tax treatment and lending compliance.</p>
+                  </div>
+                  <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                    <p className="font-black text-white">Arrears watch</p>
+                    <p className="mt-1">Current overdue scheduled amount: <span className="font-black text-rose-100">{formatMoney(metrics.arrears)}</span></p>
+                  </div>
                 </div>
-                <div className="rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4 text-yellow-50">
-                  <p className="font-black">Before real-money use</p>
-                  <p className="mt-1">Confirm member agreements, POPIA controls, accounting/tax treatment and lending compliance.</p>
-                </div>
-                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
-                  <p className="font-black text-white">Arrears watch</p>
-                  <p className="mt-1">Current overdue scheduled amount: <span className="font-black text-rose-100">{formatMoney(metrics.arrears)}</span></p>
-                </div>
+              </Panel>
+            </section>
+
+            <Panel title="Banking operations cockpit" subtitle="Inspired by bank back-office close routines: liquidity, exceptions, onboarding readiness and ledger review.">
+              <div className="grid gap-3 lg:grid-cols-2">
+                {controlChecks.map((check) => (
+                  <ControlCheck key={check.label} label={check.label} value={check.value} detail={check.detail} tone={check.tone} />
+                ))}
+              </div>
+              <div className="mt-4 grid gap-3 text-sm text-slate-300 lg:grid-cols-3">
+                <button type="button" onClick={() => setActiveSection("members")} className="rounded-3xl border border-white/10 bg-black/15 p-4 text-left hover:bg-white/[0.08]">
+                  <ClipboardCheck className="h-5 w-5 text-yellow-100" />
+                  <p className="mt-3 font-black text-white">Onboarding queue</p>
+                  <p className="mt-1">{pendingMemberLogins.length} login link{pendingMemberLogins.length === 1 ? "" : "s"}, {pendingProfileChanges.length} profile approval{pendingProfileChanges.length === 1 ? "" : "s"}.</p>
+                </button>
+                <button type="button" onClick={() => setActiveSection("loans")} className="rounded-3xl border border-white/10 bg-black/15 p-4 text-left hover:bg-white/[0.08]">
+                  <Landmark className="h-5 w-5 text-emerald-200" />
+                  <p className="mt-3 font-black text-white">Credit pipeline</p>
+                  <p className="mt-1">{pendingLoanRequests.length} request{pendingLoanRequests.length === 1 ? "" : "s"} to price and {offersAwaitingAcceptance.length} offer{offersAwaitingAcceptance.length === 1 ? "" : "s"} awaiting acceptance.</p>
+                </button>
+                <button type="button" onClick={() => setActiveSection("ledger")} className="rounded-3xl border border-white/10 bg-black/15 p-4 text-left hover:bg-white/[0.08]">
+                  <FileDown className="h-5 w-5 text-emerald-200" />
+                  <p className="mt-3 font-black text-white">Ledger review pack</p>
+                  <p className="mt-1">Export the recent immutable transaction window for a daily close/reconciliation file.</p>
+                </button>
               </div>
             </Panel>
-          </section>
+          </div>
         ) : null}
 
         {activeSection === "members" ? (
           <div className="space-y-5">
+            <Panel title="Profile change approvals" subtitle="Bank-style maker-checker review for sensitive member contact details.">
+              <div className="space-y-3">
+                {pendingProfileChanges.length === 0 ? <Empty label="No profile changes are waiting for review." /> : null}
+                {pendingProfileChanges.map((request) => (
+                  <div key={request.id} className="rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-[0.18em] text-yellow-100">Profile change request</p>
+                        <h3 className="mt-2 text-xl font-black text-white">{memberName(request.member_id, data.members)}</h3>
+                        <p className="mt-1 text-sm text-yellow-50/80">Submitted {shortDate(request.submitted_at)}</p>
+                      </div>
+                      <Pill status={request.status} />
+                    </div>
+                    <div className="mt-4 grid gap-2 text-sm text-slate-200 sm:grid-cols-3">
+                      {profileChangeItems(request).map((item) => (
+                        <div key={item.label} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">{item.label}</p>
+                          <p className="mt-1 font-bold text-white">{item.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => void reviewProfileChange(request.id, "approved")} className="rounded-full bg-emerald-400 px-4 py-2 text-xs font-black text-slate-950">
+                        Approve and apply
+                      </button>
+                      <button type="button" onClick={() => void reviewProfileChange(request.id, "rejected")} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+
             <Panel title="Pending member logins" subtitle="People who can sign in but still need a DGB member profile.">
               <div className="space-y-4">
                 {pendingMemberLogins.length === 0 ? <Empty label="No member logins are waiting to be linked." /> : null}
@@ -820,6 +969,15 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
 
         {activeSection === "ledger" ? (
           <Panel title="Recent ledger transactions" subtitle="Immutable movement log. Corrections must be posted as reversing entries.">
+            <div className="mb-4 flex flex-col gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-black text-emerald-100">Daily close export</p>
+                <p className="mt-1 text-sm text-slate-300">Download the recent ledger window for reconciliation review.</p>
+              </div>
+              <button type="button" onClick={downloadLedgerCsv} className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-400 px-4 py-2 text-sm font-black text-slate-950">
+                <FileDown className="h-4 w-4" /> Export CSV
+              </button>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[820px] text-left text-sm">
                 <thead className="text-xs uppercase tracking-[0.18em] text-slate-500">
@@ -857,18 +1015,31 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
 }
 
 function calculateAdminMetrics(data: AdminData) {
-  const availableCash = data.transactions.reduce((total, transaction) => total + (transaction.direction === "credit" ? transaction.amount_cents : -transaction.amount_cents), 0);
+  const availableCash = data.balances.reduce((total, balance) => total + Number(balance.balance_cents ?? 0), 0);
   const outstanding = data.schedules.reduce((total, schedule) => total + Math.max(schedule.amount_due_cents - schedule.paid_cents, 0), 0);
   const interestDistributed = data.interestEarnings.reduce((total, row) => total + Number(row.interest_earned_cents ?? 0), 0);
   const today = new Date().toISOString().slice(0, 10);
-  const arrears = data.schedules
-    .filter((schedule) => schedule.due_date < today && schedule.paid_cents < schedule.amount_due_cents)
-    .reduce((total, schedule) => total + (schedule.amount_due_cents - schedule.paid_cents), 0);
-  return { availableCash, outstanding, arrears, interestDistributed };
+  const overdueSchedules = data.schedules.filter((schedule) => schedule.due_date < today && schedule.paid_cents < schedule.amount_due_cents);
+  const arrears = overdueSchedules.reduce((total, schedule) => total + (schedule.amount_due_cents - schedule.paid_cents), 0);
+  return { availableCash, outstanding, arrears, arrearsCount: overdueSchedules.length, interestDistributed };
 }
 
 function memberName(memberId: string, members: MemberRow[]) {
   return members.find((member) => member.id === memberId)?.full_name ?? "Unknown member";
+}
+
+function profileChangeItems(request: ProfileChangeRequestRow) {
+  const changes = request.requested_changes;
+  const items = [
+    ["Phone", changes.phone],
+    ["Next of kin", changes.next_of_kin_name],
+    ["Next of kin phone", changes.next_of_kin_phone],
+    ["Notes", changes.notes],
+  ];
+
+  return items
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+    .map(([label, value]) => ({ label: String(label), value: String(value) }));
 }
 
 function Panel({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
@@ -907,6 +1078,27 @@ function MetricCard({ icon: Icon, label, value, detail }: { icon: LucideIcon; la
       <p className="mt-4 text-sm font-bold text-slate-400">{label}</p>
       <p className="mt-1 text-3xl font-black tracking-[-0.04em] text-white">{value}</p>
       <p className="mt-3 text-xs leading-5 text-slate-500">{detail}</p>
+    </div>
+  );
+}
+
+function ControlCheck({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: "clear" | "attention" | "critical" }) {
+  const toneClass = tone === "clear"
+    ? "border-emerald-300/20 bg-emerald-400/10 text-emerald-100"
+    : tone === "attention"
+      ? "border-yellow-300/20 bg-yellow-300/10 text-yellow-100"
+      : "border-rose-300/20 bg-rose-400/10 text-rose-100";
+
+  return (
+    <div className={`rounded-3xl border p-4 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] opacity-75">{tone === "clear" ? "Clear" : tone === "attention" ? "Watch" : "Action"}</p>
+          <p className="mt-2 font-black text-white">{label}</p>
+        </div>
+        <span className="rounded-full bg-black/20 px-3 py-1 text-xs font-black text-white">{value}</span>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-slate-200">{detail}</p>
     </div>
   );
 }
