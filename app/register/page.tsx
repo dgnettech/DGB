@@ -64,7 +64,7 @@ export default function RegisterPage() {
     }
 
     if (!data.session) {
-      setMessage("Account created. If Supabase email confirmation is enabled, check your email and then log in.");
+      setMessage("Account created and ready. You can now log in. If your member portal says profile pending, ask a finance admin to use Admin → Members → Pending member logins.");
       setBusy(false);
       return;
     }
