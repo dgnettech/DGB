@@ -26,6 +26,7 @@ import {
   type DgbProfile,
   type DocumentRow,
   downloadCsv,
+  downloadSignedDocument,
   formatMoney,
   type InterestEarningRow,
   type LoanInterestMethod,
@@ -441,6 +442,18 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     setMessage("Downloaded the recent ledger review file.");
   }
 
+  async function downloadDocument(row: DocumentRow) {
+    setMessage(null);
+    setError(null);
+
+    try {
+      await downloadSignedDocument(supabase, row);
+      setMessage(`Generated a secure 60-second download link for ${row.file_name}.`);
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : "Could not generate a secure document download link.");
+    }
+  }
+
   const openLoans = data.loans.filter((loan) => ["active", "overdue", "approved"].includes(loan.status));
   const pendingLoanRequests = data.loanRequests.filter((request) => request.status === "pending");
   const offersAwaitingAcceptance = data.loanRequests.filter((request) => request.status === "approved");
@@ -735,6 +748,25 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                     </div>
                   );
                 })}
+              </div>
+            </Panel>
+
+            <Panel title="Document vault" subtitle="Recent private files uploaded by members. Downloads use short-lived signed Supabase Storage links.">
+              <div className="space-y-3">
+                {data.documents.length === 0 ? <Empty label="No member documents uploaded yet." /> : null}
+                {data.documents.slice(0, 12).map((row) => (
+                  <div key={row.id} className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-black/15 p-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-black text-white">{row.file_name}</p>
+                      <p className="mt-1 text-sm leading-6 text-slate-400">
+                        {memberName(row.member_id, data.members)} · {row.kind.replace("_", " ")} · {shortDate(row.uploaded_at)}
+                      </p>
+                    </div>
+                    <button type="button" onClick={() => void downloadDocument(row)} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100">
+                      <FileDown className="h-4 w-4" /> Secure download
+                    </button>
+                  </div>
+                ))}
               </div>
             </Panel>
 

@@ -1,3 +1,5 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 export type DgbRole = "super_admin" | "finance_admin" | "viewer" | "member";
 
 export type DgbProfile = {
@@ -216,6 +218,26 @@ export function downloadCsv(fileName: string, headers: string[], rows: Array<Arr
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+export async function downloadSignedDocument(supabase: SupabaseClient, row: DocumentRow) {
+  if (typeof document === "undefined") return;
+
+  const { data, error } = await supabase.storage
+    .from("member-documents")
+    .createSignedUrl(row.storage_path, 60, { download: sanitizeFileName(row.file_name) });
+
+  if (error) {
+    throw error;
+  }
+
+  const link = document.createElement("a");
+  link.href = data.signedUrl;
+  link.download = sanitizeFileName(row.file_name);
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function csvCell(value: string | number | null | undefined) {

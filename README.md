@@ -9,8 +9,8 @@ Private internal banking and loan-management platform for **DGB — Dunne Group 
 This repository currently includes the Phase 1/2 foundation:
 
 - Modern private-banking style dashboard UI.
-- Admin portal overview and Controls workspace for member accounts, fund totals, loans, arrears, documents, reconciliation exceptions and audit trail.
-- Member portal preview for balances, repayment schedules, loan requests, approval-offer review, statement export, documents and notifications.
+- Admin portal overview, Controls workspace and document vault for member accounts, fund totals, loans, arrears, documents, reconciliation exceptions and audit trail.
+- Member portal preview for balances, repayment schedules, loan requests, approval-offer review, statement export, signed document downloads and notifications.
 - Ledger-first financial model: balances are calculated from transactions, not manually typed.
 - Simple-interest and reducing-balance repayment schedule calculations.
 - Lending-pool interest model: loan principal comes out of pooled cash only after the member accepts the finance-admin offer, and loan interest collected on repayments is distributed proportionally to positive-balance members.
@@ -21,8 +21,8 @@ This repository currently includes the Phase 1/2 foundation:
 - `/` — DGB MVP dashboard
 - `/login` — Supabase Auth login for admins and members
 - `/register` — first-admin bootstrap and member login registration
-- `/admin` — live admin portal for member/wallet creation, contributions, loan requests and ledger review
-- `/member` — live member portal for balances, loan requests, schedules, documents and profile-change requests
+- `/admin` — live admin portal for member/wallet creation, contributions, loan requests, private document downloads and ledger review
+- `/member` — live member portal for balances, loan requests, schedules, signed document downloads and profile-change requests
 - `/robots.txt` — blocks search indexing
 - `/sitemap.xml` — private-app placeholder sitemap
 
@@ -100,6 +100,7 @@ The migration creates the MVP tables:
 Additional live-operation helpers:
 
 - Private Supabase Storage bucket: `member-documents`
+- Short-lived signed download links for private member documents
 - RPC: `create_member_with_account(...)`
 - RPC: `capture_contribution(...)`
 - Auth trigger: first registered user becomes `super_admin`; later users default to `member`
@@ -122,7 +123,7 @@ Security foundations included:
 - Admin-only financial posting.
 - Member loan requests forced to `pending` on insert with no product/rate/term template fields.
 - Member profile change requests captured for admin approval before sensitive details are updated.
-- Member document uploads limited to their own member/loan records.
+- Member document uploads and signed downloads limited to their own member/loan records; admins can review documents through the vault.
 - Transaction rows protected from update/delete; corrections must be reversing entries.
 - Deletion guards on member and financial records.
 - Audit triggers for inserts/updates/deletes across operational tables.
@@ -131,9 +132,9 @@ Security foundations included:
 
 ## Next build phase
 
-The live Supabase Auth shell, first-admin bootstrap, admin dashboard, member dashboard, bank-style operations cockpit, Controls reconciliation workspace, CSV statement/export paths, document upload path, member linking, contribution capture, negotiated loan offers, member acceptance, maker-checker profile-change review and repayment capture are now in place. The next implementation pass should add:
+The live Supabase Auth shell, first-admin bootstrap, admin dashboard, member dashboard, bank-style operations cockpit, Controls reconciliation workspace, CSV statement/export paths, document upload/download path, member linking, contribution capture, negotiated loan offers, member acceptance, maker-checker profile-change review and repayment capture are now in place. The next implementation pass should add:
 
-1. Signed document download links, PDF statements and agreements.
+1. PDF statements and agreements.
 2. Email notifications for approvals, repayment reminders and overdue alerts.
 3. CSV/XLSX exports and backup tooling.
 4. Reversal workflow for correcting posted ledger entries.

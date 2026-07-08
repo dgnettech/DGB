@@ -10,6 +10,7 @@ import {
   type BalanceRow,
   type DocumentRow,
   downloadCsv,
+  downloadSignedDocument,
   formatMoney,
   type InterestEarningRow,
   type LoanRequestRow,
@@ -313,6 +314,18 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
     await loadData();
   }
 
+  async function downloadDocument(row: DocumentRow) {
+    setMessage(null);
+    setError(null);
+
+    try {
+      await downloadSignedDocument(supabase, row);
+      setMessage(`Generated a secure 60-second download link for ${row.file_name}.`);
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : "Could not generate a secure document download link.");
+    }
+  }
+
   if (!data.member && !loading) {
     return (
       <div className="px-5 py-8 sm:px-8 lg:px-10">
@@ -531,7 +544,18 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
           </Panel>
           <Panel title="Documents and notifications" subtitle="Files and messages attached to your member account.">
             <div className="space-y-4">
-              <List items={data.documents.map((row) => ({ id: row.id, title: row.file_name, detail: `${row.kind.replace("_", " ")} · ${shortDate(row.uploaded_at)}`, status: "stored" }))} empty="No documents uploaded yet." />
+              {data.documents.length === 0 ? <Empty label="No documents uploaded yet." /> : null}
+              {data.documents.map((row) => (
+                <div key={row.id} className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-black/15 p-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-black text-white">{row.file_name}</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-400">{row.kind.replace("_", " ")} · {shortDate(row.uploaded_at)}</p>
+                  </div>
+                  <button type="button" onClick={() => void downloadDocument(row)} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100">
+                    <FileDown className="h-4 w-4" /> Secure download
+                  </button>
+                </div>
+              ))}
               <List items={data.notifications.map((row) => ({ id: row.id, title: row.title, detail: row.body, status: row.read_at ? "read" : "unread" }))} empty="No notifications yet." />
             </div>
           </Panel>
