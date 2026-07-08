@@ -8,9 +8,9 @@ import {
   Landmark,
   Link2,
   type LucideIcon,
+  Percent,
   PiggyBank,
   Plus,
-  ReceiptText,
   RefreshCw,
   UserCheck,
   UsersRound,
@@ -23,11 +23,14 @@ import {
   type BalanceRow,
   type DgbProfile,
   formatMoney,
+  type InterestEarningRow,
+  type LoanInterestMethod,
   type LoanProductRow,
   type LoanRequestRow,
   type LoanRow,
   type MemberRow,
   parseMoneyToCents,
+  parsePercent,
   type ScheduleRow,
   shortDate,
   statusClassName,
@@ -39,6 +42,7 @@ type AdminData = {
   members: MemberRow[];
   accounts: AccountRow[];
   balances: BalanceRow[];
+  interestEarnings: InterestEarningRow[];
   transactions: TransactionRow[];
   loanRequests: LoanRequestRow[];
   loanProducts: LoanProductRow[];
@@ -51,6 +55,7 @@ const emptyData: AdminData = {
   members: [],
   accounts: [],
   balances: [],
+  interestEarnings: [],
   transactions: [],
   loanRequests: [],
   loanProducts: [],
@@ -80,11 +85,12 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     setLoading(true);
     setError(null);
 
-    const [users, members, accounts, balances, transactions, loanRequests, loanProducts, loans, schedules] = await Promise.all([
+    const [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loanProducts, loans, schedules] = await Promise.all([
       supabase.from("users").select("id,email,full_name,role,mfa_enabled").order("created_at", { ascending: true }).returns<DgbProfile[]>(),
       supabase.from("members").select("*").order("created_at", { ascending: false }).returns<MemberRow[]>(),
       supabase.from("accounts").select("*").order("created_at", { ascending: false }).returns<AccountRow[]>(),
       supabase.from("member_account_balances").select("*").returns<BalanceRow[]>(),
+      supabase.from("member_interest_earnings").select("*").returns<InterestEarningRow[]>(),
       supabase.from("transactions").select("*").order("captured_at", { ascending: false }).limit(75).returns<TransactionRow[]>(),
       supabase.from("loan_requests").select("*").order("submitted_at", { ascending: false }).limit(75).returns<LoanRequestRow[]>(),
       supabase.from("loan_products").select("*").order("name").returns<LoanProductRow[]>(),
@@ -92,7 +98,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       supabase.from("repayment_schedules").select("*").order("due_date", { ascending: true }).limit(250).returns<ScheduleRow[]>(),
     ]);
 
-    const failed = [users, members, accounts, balances, transactions, loanRequests, loanProducts, loans, schedules].find((result) => result.error);
+    const failed = [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loanProducts, loans, schedules].find((result) => result.error);
     if (failed?.error) {
       setError(failed.error.message);
       setLoading(false);
@@ -104,6 +110,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       members: members.data ?? [],
       accounts: accounts.data ?? [],
       balances: balances.data ?? [],
+      interestEarnings: interestEarnings.data ?? [],
       transactions: transactions.data ?? [],
       loanRequests: loanRequests.data ?? [],
       loanProducts: loanProducts.data ?? [],
@@ -242,12 +249,63 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     await loadData();
   }
 
-  async function approveLoanRequest(request: LoanRequestRow) {
+  async function upsertLoanProduct(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setMessage(null);
     setError(null);
+    const form = new FormData(event.currentTarget);
+    const productId = String(form.get("product_id") ?? "");
+    const name = String(form.get("name") ?? "").trim();
+    const annualRate = parsePercent(form.get("annual_interest_rate"));
+    const interestMethod = String(form.get("interest_method") ?? "reducing_balance") as LoanInterestMethod;
+    const maxTermMonths = Number(form.get("max_term_months"));
+    const adminFeeCents = parseMoneyToCents(form.get("admin_fee")) ?? 0;
+    const penaltyRate = parsePercent(form.get("penalty_rate")) ?? 0;
+    const active = form.get("active") === "on";
+
+    if (!name || annualRate === null || !Number.isFinite(maxTermMonths) || maxTermMonths <= 0) {
+      setError("Product name, annual interest rate and maximum term are required.");
+      return;
+    }
+
+    const { error: rpcError } = await supabase.rpc("upsert_loan_product", {
+      p_product_id: productId || null,
+      p_name: name,
+      p_annual_interest_rate: annualRate,
+      p_interest_method: interestMethod,
+      p_max_term_months: maxTermMonths,
+      p_admin_fee_cents: adminFeeCents,
+      p_penalty_rate: penaltyRate,
+      p_active: active,
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setMessage(productId ? "Loan product and rate updated." : "Loan product and rate created.");
+    await loadData();
+  }
+
+  async function approveLoanRequest(event: React.FormEvent<HTMLFormElement>, request: LoanRequestRow) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+    const form = new FormData(event.currentTarget);
     const account = data.accounts.find((item) => item.member_id === request.member_id && item.status === "active");
+    const product = data.loanProducts.find((item) => item.id === request.loan_product_id);
+    const annualRate = parsePercent(form.get("annual_interest_rate"));
+    const adminFeeCents = parseMoneyToCents(form.get("admin_fee")) ?? 0;
+
     if (!account) {
       setError("This member needs an active wallet account before the loan can be approved.");
+      return;
+    }
+
+    if (!product || annualRate === null) {
+      setError("Choose a valid loan product and interest rate before approval.");
       return;
     }
 
@@ -257,6 +315,9 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       p_reference: `DGB-LOAN-${request.id.slice(0, 8).toUpperCase()}`,
       p_start_date: new Date().toISOString().slice(0, 10),
       p_notes: "Approved from DGB admin dashboard.",
+      p_annual_interest_rate: annualRate,
+      p_interest_method: product.interest_method,
+      p_admin_fee_cents: adminFeeCents,
     });
 
     if (rpcError) {
@@ -264,7 +325,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       return;
     }
 
-    setMessage("Loan request approved. Loan, disbursement transaction and repayment schedule were created.");
+    setMessage(`Loan request approved at ${annualRate}% annual interest. Principal left the pooled cash and future interest will be distributed by member pool share.`);
     await loadData();
   }
 
@@ -360,7 +421,65 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
           <MetricCard icon={PiggyBank} label="Available cash" value={formatMoney(metrics.availableCash)} detail="Credits less debits in the ledger" />
           <MetricCard icon={UsersRound} label="Members" value={String(data.members.length)} detail={`${data.users.length} registered login users`} />
           <MetricCard icon={Landmark} label="Loans outstanding" value={formatMoney(metrics.outstanding)} detail="Schedule amount due less paid" />
-          <MetricCard icon={ReceiptText} label="Arrears" value={formatMoney(metrics.arrears)} detail="Past-due unpaid schedule rows" />
+          <MetricCard icon={Percent} label="Interest distributed" value={formatMoney(metrics.interestDistributed)} detail="Credited back to funding members" />
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+          <Panel title="Loan products and rates" subtitle="Set the default loan interest rate, fee and term. Approved loans can still use the rate shown at approval time.">
+            <form onSubmit={upsertLoanProduct} className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
+                Existing product
+                <select name="product_id" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                  <option value="">Create new product / update by name</option>
+                  {data.loanProducts.map((product) => (
+                    <option key={product.id} value={product.id} className="bg-slate-950">
+                      {product.name} · {product.annual_interest_rate}% · {product.max_term_months} months · {product.active ? "active" : "inactive"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Field name="name" label="Product name" placeholder="Family Relief" required />
+              <Field name="annual_interest_rate" label="Annual interest rate %" placeholder="12" required />
+              <label className="block text-sm font-black text-slate-200">
+                Interest method
+                <select name="interest_method" required defaultValue="reducing_balance" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                  <option value="reducing_balance" className="bg-slate-950">Reducing balance</option>
+                  <option value="simple" className="bg-slate-950">Simple</option>
+                </select>
+              </label>
+              <Field name="max_term_months" label="Max term months" placeholder="24" type="number" required />
+              <Field name="admin_fee" label="Admin fee" placeholder="250.00" />
+              <Field name="penalty_rate" label="Penalty rate %" placeholder="2" />
+              <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-black text-slate-200">
+                <input name="active" type="checkbox" defaultChecked className="h-4 w-4 accent-emerald-400" /> Active product
+              </label>
+              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
+                <Percent className="h-4 w-4" /> Save product rate
+              </button>
+            </form>
+          </Panel>
+
+          <Panel title="Current lending products" subtitle="Members select one of these when requesting a loan.">
+            <div className="space-y-3">
+              {data.loanProducts.map((product) => (
+                <div key={product.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-black text-white">{product.name}</p>
+                      <p className="mt-1 text-sm text-slate-400">{product.interest_method.replace("_", " ")} · max {product.max_term_months} months</p>
+                    </div>
+                    <Pill status={product.active ? "active" : "inactive"} />
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-slate-400">
+                    <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.annual_interest_rate}%</span>Interest</div>
+                    <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{formatMoney(product.admin_fee_cents)}</span>Admin fee</div>
+                    <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.penalty_rate}%</span>Penalty</div>
+                  </div>
+                </div>
+              ))}
+              {data.loanProducts.length === 0 ? <Empty label="No loan products yet." /> : null}
+            </div>
+          </Panel>
         </section>
 
         <section className="grid gap-6 xl:grid-cols-3">
@@ -481,7 +600,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
         <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
           <Panel title="Members and balances" subtitle="Balances are calculated from member_account_balances, not typed manually.">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[840px] text-left text-sm">
+              <table className="w-full min-w-[980px] text-left text-sm">
                 <thead className="text-xs uppercase tracking-[0.18em] text-slate-500">
                   <tr>
                     <th className="px-3 py-3">Member</th>
@@ -489,6 +608,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                     <th className="px-3 py-3">Login</th>
                     <th className="px-3 py-3">Account</th>
                     <th className="px-3 py-3">Balance</th>
+                    <th className="px-3 py-3">Interest earned</th>
                     <th className="px-3 py-3">Status</th>
                   </tr>
                 </thead>
@@ -496,6 +616,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                   {data.members.map((member) => {
                     const account = data.accounts.find((item) => item.member_id === member.id);
                     const balance = data.balances.find((item) => item.member_id === member.id)?.balance_cents ?? 0;
+                    const interestEarned = data.interestEarnings.find((item) => item.member_id === member.id)?.interest_earned_cents ?? 0;
                     const linkedUser = data.users.find((user) => user.id === member.user_id);
                     return (
                       <tr key={member.id}>
@@ -504,6 +625,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                         <td className="px-3 py-4 text-slate-300">{linkedUser ? <Pill status={linkedUser.role} /> : <span className="text-slate-500">Not linked</span>}</td>
                         <td className="px-3 py-4 text-slate-300">{account?.account_number ?? "No wallet yet"}</td>
                         <td className="px-3 py-4 font-black text-emerald-200">{formatMoney(balance)}</td>
+                        <td className="px-3 py-4 font-black text-yellow-100">{formatMoney(interestEarned)}</td>
                         <td className="px-3 py-4"><Pill status={member.status} /></td>
                       </tr>
                     );
@@ -516,29 +638,60 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
           <Panel title="Loan requests" subtitle="Approve creates a loan, disbursement transaction and schedule.">
             <div className="space-y-3">
               {data.loanRequests.length === 0 ? <Empty label="No loan requests yet." /> : null}
-              {data.loanRequests.map((request) => (
-                <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-black text-white">{memberName(request.member_id, data.members)}</p>
-                      <p className="mt-1 text-sm text-slate-400">{formatMoney(request.requested_amount_cents)} over {request.requested_term_months} months</p>
+              {data.loanRequests.map((request) => {
+                const product = data.loanProducts.find((item) => item.id === request.loan_product_id);
+                return (
+                  <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-black text-white">{memberName(request.member_id, data.members)}</p>
+                        <p className="mt-1 text-sm text-slate-400">
+                          {formatMoney(request.requested_amount_cents)} over {request.requested_term_months} months
+                          {product ? ` · ${product.name} @ ${product.annual_interest_rate}%` : ""}
+                        </p>
+                      </div>
+                      <Pill status={request.status} />
                     </div>
-                    <Pill status={request.status} />
+                    <p className="mt-3 text-sm leading-6 text-slate-300">{request.purpose}</p>
+                    <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
+                    {request.status === "pending" ? (
+                      <div className="mt-4 space-y-3">
+                        <form onSubmit={(event) => approveLoanRequest(event, request)} className="grid gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-3 sm:grid-cols-2">
+                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
+                            Annual rate %
+                            <input
+                              name="annual_interest_rate"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              required
+                              defaultValue={product?.annual_interest_rate ?? 0}
+                              className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
+                            />
+                          </label>
+                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
+                            Admin fee
+                            <input
+                              name="admin_fee"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              defaultValue={product ? Number(product.admin_fee_cents) / 100 : 0}
+                              className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
+                            />
+                          </label>
+                          <button type="submit" className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100 sm:col-span-2">
+                            Approve with this rate + distribute future interest
+                          </button>
+                        </form>
+                        <button type="button" onClick={() => rejectLoanRequest(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
+                          Reject request
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
-                  <p className="mt-3 text-sm leading-6 text-slate-300">{request.purpose}</p>
-                  <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
-                  {request.status === "pending" ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button type="button" onClick={() => approveLoanRequest(request)} className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100">
-                        Approve + generate schedule
-                      </button>
-                      <button type="button" onClick={() => rejectLoanRequest(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
-                        Reject request
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Panel>
         </section>
@@ -582,11 +735,12 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
 function calculateAdminMetrics(data: AdminData) {
   const availableCash = data.transactions.reduce((total, transaction) => total + (transaction.direction === "credit" ? transaction.amount_cents : -transaction.amount_cents), 0);
   const outstanding = data.schedules.reduce((total, schedule) => total + Math.max(schedule.amount_due_cents - schedule.paid_cents, 0), 0);
+  const interestDistributed = data.interestEarnings.reduce((total, row) => total + Number(row.interest_earned_cents ?? 0), 0);
   const today = new Date().toISOString().slice(0, 10);
   const arrears = data.schedules
     .filter((schedule) => schedule.due_date < today && schedule.paid_cents < schedule.amount_due_cents)
     .reduce((total, schedule) => total + (schedule.amount_due_cents - schedule.paid_cents), 0);
-  return { availableCash, outstanding, arrears };
+  return { availableCash, outstanding, arrears, interestDistributed };
 }
 
 function memberName(memberId: string, members: MemberRow[]) {

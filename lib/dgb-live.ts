@@ -50,6 +50,12 @@ export type BalanceRow = {
   balance_cents: number;
 };
 
+export type InterestEarningRow = {
+  account_id: string;
+  member_id: string;
+  interest_earned_cents: number;
+};
+
 export type TransactionRow = {
   id: string;
   account_id: string;
@@ -101,6 +107,10 @@ export type ScheduleRow = {
   penalty_cents: number;
   amount_due_cents: number;
   paid_cents: number;
+  principal_paid_cents?: number;
+  interest_paid_cents?: number;
+  fee_paid_cents?: number;
+  penalty_paid_cents?: number;
   status: string;
 };
 
@@ -145,6 +155,15 @@ export function parseMoneyToCents(value: FormDataEntryValue | null) {
     return null;
   }
   return Math.round(amount * 100);
+}
+
+export function parsePercent(value: FormDataEntryValue | null) {
+  const normalized = String(value ?? "").replace(/[^0-9.]/g, "");
+  const amount = Number.parseFloat(normalized);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return null;
+  }
+  return amount;
 }
 
 export function shortDate(value: string | null | undefined) {

@@ -1,7 +1,7 @@
 "use client";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { AlertTriangle, ArrowRight, Bell, FileUp, HandCoins, Landmark, RefreshCw, UserCog, WalletCards } from "lucide-react";
+import { AlertTriangle, ArrowRight, Bell, FileUp, HandCoins, Percent, RefreshCw, UserCog, WalletCards } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AuthGate } from "@/components/dgb/auth-gate";
 import { DgbAppShell } from "@/components/dgb/app-shell";
@@ -10,6 +10,7 @@ import {
   type BalanceRow,
   type DocumentRow,
   formatMoney,
+  type InterestEarningRow,
   type LoanProductRow,
   type LoanRequestRow,
   type LoanRow,
@@ -27,6 +28,7 @@ type MemberData = {
   member: MemberRow | null;
   accounts: AccountRow[];
   balances: BalanceRow[];
+  interestEarnings: InterestEarningRow[];
   transactions: TransactionRow[];
   loanProducts: LoanProductRow[];
   loanRequests: LoanRequestRow[];
@@ -40,6 +42,7 @@ const emptyData: MemberData = {
   member: null,
   accounts: [],
   balances: [],
+  interestEarnings: [],
   transactions: [],
   loanProducts: [],
   loanRequests: [],
@@ -86,9 +89,10 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
       return;
     }
 
-    const [accounts, balances, transactions, loanProducts, loanRequests, loans, documents, notifications] = await Promise.all([
+    const [accounts, balances, interestEarnings, transactions, loanProducts, loanRequests, loans, documents, notifications] = await Promise.all([
       supabase.from("accounts").select("*").eq("member_id", member.id).returns<AccountRow[]>(),
       supabase.from("member_account_balances").select("*").eq("member_id", member.id).returns<BalanceRow[]>(),
+      supabase.from("member_interest_earnings").select("*").eq("member_id", member.id).returns<InterestEarningRow[]>(),
       supabase.from("transactions").select("*").eq("member_id", member.id).order("captured_at", { ascending: false }).limit(50).returns<TransactionRow[]>(),
       supabase.from("loan_products").select("*").order("name").returns<LoanProductRow[]>(),
       supabase.from("loan_requests").select("*").eq("member_id", member.id).order("submitted_at", { ascending: false }).returns<LoanRequestRow[]>(),
@@ -97,7 +101,7 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
       supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(20).returns<NotificationRow[]>(),
     ]);
 
-    const failed = [accounts, balances, transactions, loanProducts, loanRequests, loans, documents, notifications].find((result) => result.error);
+    const failed = [accounts, balances, interestEarnings, transactions, loanProducts, loanRequests, loans, documents, notifications].find((result) => result.error);
     if (failed?.error) {
       setError(failed.error.message);
       setLoading(false);
@@ -119,6 +123,7 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
       member,
       accounts: accounts.data ?? [],
       balances: balances.data ?? [],
+      interestEarnings: interestEarnings.data ?? [],
       transactions: transactions.data ?? [],
       loanProducts: loanProducts.data ?? [],
       loanRequests: loanRequests.data ?? [],
@@ -138,6 +143,7 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
   }, [loadData]);
 
   const memberBalance = useMemo(() => data.balances.reduce((total, balance) => total + Number(balance.balance_cents ?? 0), 0), [data.balances]);
+  const interestEarned = useMemo(() => data.interestEarnings.reduce((total, row) => total + Number(row.interest_earned_cents ?? 0), 0), [data.interestEarnings]);
   const outstanding = useMemo(() => data.schedules.reduce((total, row) => total + Math.max(row.amount_due_cents - row.paid_cents, 0), 0), [data.schedules]);
   const nextPayment = useMemo(() => data.schedules.find((row) => row.paid_cents < row.amount_due_cents), [data.schedules]);
 
@@ -296,7 +302,7 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard icon={WalletCards} label="DGB balance" value={formatMoney(memberBalance)} detail="Calculated from wallet ledger" />
-          <MetricCard icon={Landmark} label="Active loans" value={String(data.loans.filter((loan) => loan.status === "active" || loan.status === "overdue").length)} detail="Open repayment plans" />
+          <MetricCard icon={Percent} label="Interest earned" value={formatMoney(interestEarned)} detail="Your share of lending-pool interest" />
           <MetricCard icon={HandCoins} label="Outstanding" value={formatMoney(outstanding)} detail="Total unpaid schedule amount" />
           <MetricCard icon={Bell} label="Next payment" value={nextPayment ? formatMoney(nextPayment.amount_due_cents - nextPayment.paid_cents) : "—"} detail={nextPayment ? shortDate(nextPayment.due_date) : "No payment due"} />
         </section>

@@ -13,6 +13,7 @@ This repository currently includes the Phase 1/2 foundation:
 - Member portal preview for balances, repayment schedules, loan actions, statements and notifications.
 - Ledger-first financial model: balances are calculated from transactions, not manually typed.
 - Simple-interest and reducing-balance repayment schedule calculations.
+- Lending-pool interest model: loan principal comes out of pooled cash, and loan interest collected on repayments is distributed proportionally to positive-balance members.
 - Supabase PostgreSQL schema migration with RLS policies, immutable transaction protection, deletion guards, audit triggers and seed loan products.
 
 ## Routes
@@ -71,6 +72,7 @@ Create a Supabase project and apply:
 supabase/migrations/202607070001_dgb_mvp_schema.sql
 supabase/migrations/202607070002_dgb_live_operations.sql
 supabase/migrations/202607070003_dgb_bootstrap_loans.sql
+supabase/migrations/202607080001_dgb_pool_interest_distribution.sql
 ```
 
 The migration creates the MVP tables:
@@ -100,8 +102,11 @@ Additional live-operation helpers:
 - RPC: `bootstrap_status()`
 - RPC: `link_member_to_user(...)`
 - RPC: `set_user_role(...)`
+- RPC: `upsert_loan_product(...)`
 - RPC: `approve_loan_request(...)`
 - RPC: `capture_repayment(...)`
+- Internal RPC: `distribute_loan_interest(...)`
+- RLS-safe `member_interest_earnings` view
 
 Security foundations included:
 
@@ -116,6 +121,7 @@ Security foundations included:
 - Deletion guards on member and financial records.
 - Audit triggers for inserts/updates/deletes across operational tables.
 - RLS-safe `member_account_balances` view.
+- RLS-safe `member_interest_earnings` view for each member's distributed loan-interest income.
 
 ## Next build phase
 
