@@ -2,7 +2,6 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  AlertTriangle,
   Banknote,
   CheckCircle2,
   Landmark,
@@ -63,6 +62,16 @@ const emptyData: AdminData = {
   schedules: [],
 };
 
+type AdminSection = "overview" | "members" | "money" | "loans" | "ledger";
+
+const adminSections: { id: AdminSection; label: string; hint: string }[] = [
+  { id: "overview", label: "Overview", hint: "What needs attention" },
+  { id: "members", label: "Members", hint: "Create, link and roles" },
+  { id: "money", label: "Money", hint: "Contributions and repayments" },
+  { id: "loans", label: "Loans", hint: "Requests, rates and products" },
+  { id: "ledger", label: "Ledger", hint: "Recent transactions" },
+];
+
 export default function AdminPage() {
   return (
     <AuthGate adminOnly>
@@ -80,6 +89,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<AdminSection>("overview");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -416,34 +426,40 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
   }
 
   const openLoans = data.loans.filter((loan) => ["active", "overdue", "approved"].includes(loan.status));
+  const pendingLoanRequests = data.loanRequests.filter((request) => request.status === "pending");
+  const linkedMemberCount = data.members.filter((member) => member.user_id).length;
+  const pendingActionCount = pendingMemberLogins.length + pendingLoanRequests.length;
+  const sectionAlertCounts: Record<AdminSection, number> = {
+    overview: pendingActionCount,
+    members: pendingMemberLogins.length,
+    money: 0,
+    loans: pendingLoanRequests.length,
+    ledger: 0,
+  };
 
   return (
-    <div className="px-5 py-8 sm:px-8 lg:px-10">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <section className="grid gap-5 lg:grid-cols-[1fr_0.72fr] lg:items-stretch">
-          <div className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-6 shadow-2xl shadow-black/20">
-            <p className="text-xs font-black uppercase tracking-[0.28em] text-emerald-200">Admin command centre</p>
-            <h1 className="mt-3 text-4xl font-black tracking-[-0.055em] sm:text-5xl">Live DGB fund operations</h1>
-            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">
-              Manage members, logins, wallets, contributions, loan approvals and repayments directly against Supabase. Financial movements are captured through server-side database functions so ledger rows remain immutable and auditable.
-            </p>
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button type="button" onClick={loadData} className="inline-flex items-center gap-2 rounded-full bg-emerald-400 px-5 py-3 text-sm font-black text-slate-950">
-                <RefreshCw className="h-4 w-4" /> Refresh live data
-              </button>
-              {loading ? <span className="rounded-full border border-white/10 bg-white/8 px-4 py-3 text-sm text-slate-300">Loading...</span> : null}
+    <div className="px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-5 shadow-2xl shadow-black/20 sm:p-6">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-emerald-200">DGB admin</p>
+              <h1 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white sm:text-4xl">Simple finance control panel</h1>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
+                Choose a task area below. Member setup, money movements, loan approvals and ledger review are now separated so the screen stays focused.
+              </p>
             </div>
-          </div>
-
-          <div className="rounded-[2rem] border border-yellow-300/20 bg-yellow-300/10 p-6 text-yellow-50">
-            <div className="flex gap-3">
-              <AlertTriangle className="mt-1 h-6 w-6 shrink-0 text-yellow-200" />
-              <div>
-                <h2 className="text-xl font-black">Compliance reminder</h2>
-                <p className="mt-3 text-sm leading-6 text-yellow-50/85">
-                  Before real-money use, confirm legal structure, written member agreements, credit-provider requirements, POPIA controls, tax/accounting treatment, banking controls and backup/export procedures.
-                </p>
-              </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {pendingActionCount > 0 ? (
+                <span className="rounded-full border border-yellow-300/25 bg-yellow-300/10 px-4 py-3 text-sm font-black text-yellow-100">
+                  {pendingActionCount} item{pendingActionCount === 1 ? "" : "s"} need attention
+                </span>
+              ) : (
+                <span className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-3 text-sm font-black text-emerald-100">No urgent admin tasks</span>
+              )}
+              <button type="button" onClick={() => void loadData()} className="inline-flex items-center gap-2 rounded-full bg-emerald-400 px-5 py-3 text-sm font-black text-slate-950">
+                <RefreshCw className="h-4 w-4" /> {loading ? "Refreshing..." : "Refresh"}
+              </button>
             </div>
           </div>
         </section>
@@ -451,371 +467,474 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
         {message ? <Notice tone="success" message={message} /> : null}
         {error ? <Notice tone="error" message={error} /> : null}
 
-        <Panel title="Pending member logins" subtitle="These people can sign in, but their member portal will stay pending until you create or link a member profile here.">
-          <div className="space-y-4">
-            {pendingMemberLogins.length === 0 ? <Empty label="No member logins are waiting to be linked." /> : null}
-            {pendingMemberLogins.map((user) => {
-              const matchingMember = unlinkedMembers.find((member) => member.email.toLowerCase() === user.email.toLowerCase());
-              const defaultMemberNumber = `DGB-${user.id.slice(0, 8).toUpperCase()}`;
-              const defaultName = user.full_name || user.email.split("@")[0];
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard icon={PiggyBank} label="Available cash" value={formatMoney(metrics.availableCash)} detail="Ledger credits less debits" />
+          <MetricCard icon={UsersRound} label="Members linked" value={`${linkedMemberCount}/${data.members.length}`} detail={`${pendingMemberLogins.length} pending login${pendingMemberLogins.length === 1 ? "" : "s"}`} />
+          <MetricCard icon={Landmark} label="Loans outstanding" value={formatMoney(metrics.outstanding)} detail={`${openLoans.length} open loan${openLoans.length === 1 ? "" : "s"}`} />
+          <MetricCard icon={Percent} label="Interest distributed" value={formatMoney(metrics.interestDistributed)} detail="Credited to funding members" />
+        </section>
 
+        <nav className="sticky top-[5.5rem] z-20 rounded-[1.6rem] border border-white/10 bg-[#06111f]/92 p-2 shadow-xl shadow-black/20 backdrop-blur-xl">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            {adminSections.map((section) => {
+              const isActive = activeSection === section.id;
+              const count = sectionAlertCounts[section.id];
               return (
-                <div key={user.id} className="rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-black uppercase tracking-[0.18em] text-yellow-100">Waiting for member profile</p>
-                      <h3 className="mt-2 text-xl font-black text-white">{defaultName}</h3>
-                      <p className="mt-1 text-sm text-yellow-50/80">{user.email}</p>
-                    </div>
-                    <Pill status="pending" />
-                  </div>
-
-                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                    <form onSubmit={(event) => createMemberFromLogin(event, user)} className="grid gap-3 rounded-3xl border border-white/10 bg-black/15 p-4 sm:grid-cols-2">
-                      <p className="text-sm font-black text-white sm:col-span-2">Option 1 — create a new member + wallet for this login</p>
-                      <Field name="member_number" label="Member number" placeholder={defaultMemberNumber} />
-                      <Field name="full_name" label="Full name" placeholder={defaultName} />
-                      <Field name="phone" label="Phone" placeholder="+27..." />
-                      <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
-                        <Plus className="h-4 w-4" /> Create member + link login
-                      </button>
-                    </form>
-
-                    <form onSubmit={linkMemberToUser} className="grid gap-3 rounded-3xl border border-white/10 bg-black/15 p-4">
-                      <input type="hidden" name="user_email" value={user.email} />
-                      <p className="text-sm font-black text-white">Option 2 — link to an existing member</p>
-                      <label className="block text-sm font-black text-slate-200">
-                        Existing unlinked member
-                        <select name="member_id" required defaultValue={matchingMember?.id ?? ""} className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                          <option value="">Select member</option>
-                          {unlinkedMembers.map((member) => (
-                            <option key={member.id} value={member.id} className="bg-slate-950">
-                              {member.full_name} · {member.email}{member.email.toLowerCase() === user.email.toLowerCase() ? " · email match" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-black text-slate-950" type="submit">
-                        <Link2 className="h-4 w-4" /> Link selected member
-                      </button>
-                    </form>
-                  </div>
-                </div>
+                <button
+                  key={section.id}
+                  type="button"
+                  onClick={() => setActiveSection(section.id)}
+                  className={`rounded-[1.2rem] border px-4 py-3 text-left transition ${
+                    isActive
+                      ? "border-emerald-300/35 bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/15"
+                      : "border-white/10 bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
+                  }`}
+                >
+                  <span className="flex items-center justify-between gap-2 text-sm font-black">
+                    {section.label}
+                    {count > 0 ? (
+                      <span className={`rounded-full px-2 py-0.5 text-xs ${isActive ? "bg-slate-950/15 text-slate-950" : "bg-yellow-300/15 text-yellow-100"}`}>{count}</span>
+                    ) : null}
+                  </span>
+                  <span className={`mt-1 block text-xs ${isActive ? "text-slate-800" : "text-slate-500"}`}>{section.hint}</span>
+                </button>
               );
             })}
           </div>
-        </Panel>
+        </nav>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard icon={PiggyBank} label="Available cash" value={formatMoney(metrics.availableCash)} detail="Credits less debits in the ledger" />
-          <MetricCard icon={UsersRound} label="Members" value={String(data.members.length)} detail={`${data.users.length} registered login users`} />
-          <MetricCard icon={Landmark} label="Loans outstanding" value={formatMoney(metrics.outstanding)} detail="Schedule amount due less paid" />
-          <MetricCard icon={Percent} label="Interest distributed" value={formatMoney(metrics.interestDistributed)} detail="Credited back to funding members" />
-        </section>
+        {activeSection === "overview" ? (
+          <section className="grid gap-5 xl:grid-cols-[1fr_0.78fr]">
+            <Panel title="Start here" subtitle="The admin panel now shows the next actions first. Choose a row to jump to the right workspace.">
+              <div className="space-y-3">
+                <button type="button" onClick={() => setActiveSection("members")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
+                  <span>
+                    <span className="block font-black text-white">Pending member logins</span>
+                    <span className="mt-1 block text-sm text-slate-400">Create a member profile or link a login to an existing member.</span>
+                  </span>
+                  <span className="rounded-full bg-yellow-300 px-3 py-1 text-sm font-black text-slate-950">{pendingMemberLogins.length}</span>
+                </button>
+                <button type="button" onClick={() => setActiveSection("loans")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
+                  <span>
+                    <span className="block font-black text-white">Loan requests awaiting review</span>
+                    <span className="mt-1 block text-sm text-slate-400">Approve with a rate, or reject with an audit trail.</span>
+                  </span>
+                  <span className="rounded-full bg-yellow-300 px-3 py-1 text-sm font-black text-slate-950">{pendingLoanRequests.length}</span>
+                </button>
+                <button type="button" onClick={() => setActiveSection("money")} className="flex w-full items-center justify-between gap-4 rounded-3xl border border-white/10 bg-black/15 p-4 text-left">
+                  <span>
+                    <span className="block font-black text-white">Capture money movement</span>
+                    <span className="mt-1 block text-sm text-slate-400">Post contributions and loan repayments through protected RPCs.</span>
+                  </span>
+                  <Banknote className="h-5 w-5 text-emerald-200" />
+                </button>
+              </div>
+            </Panel>
 
-        <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-          <Panel title="Loan products and rates" subtitle="Set the default loan interest rate, fee and term. Approved loans can still use the rate shown at approval time.">
-            <form onSubmit={upsertLoanProduct} className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
-                Existing product
-                <select name="product_id" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="">Create new product / update by name</option>
-                  {data.loanProducts.map((product) => (
-                    <option key={product.id} value={product.id} className="bg-slate-950">
-                      {product.name} · {product.annual_interest_rate}% · {product.max_term_months} months · {product.active ? "active" : "inactive"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Field name="name" label="Product name" placeholder="Family Relief" required />
-              <Field name="annual_interest_rate" label="Annual interest rate %" placeholder="12" required />
-              <label className="block text-sm font-black text-slate-200">
-                Interest method
-                <select name="interest_method" required defaultValue="reducing_balance" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="reducing_balance" className="bg-slate-950">Reducing balance</option>
-                  <option value="simple" className="bg-slate-950">Simple</option>
-                </select>
-              </label>
-              <Field name="max_term_months" label="Max term months" placeholder="24" type="number" required />
-              <Field name="admin_fee" label="Admin fee" placeholder="250.00" />
-              <Field name="penalty_rate" label="Penalty rate %" placeholder="2" />
-              <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-black text-slate-200">
-                <input name="active" type="checkbox" defaultChecked className="h-4 w-4 accent-emerald-400" /> Active product
-              </label>
-              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
-                <Percent className="h-4 w-4" /> Save product rate
-              </button>
-            </form>
-          </Panel>
-
-          <Panel title="Current lending products" subtitle="Members select one of these when requesting a loan.">
-            <div className="space-y-3">
-              {data.loanProducts.map((product) => (
-                <div key={product.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-black text-white">{product.name}</p>
-                      <p className="mt-1 text-sm text-slate-400">{product.interest_method.replace("_", " ")} · max {product.max_term_months} months</p>
-                    </div>
-                    <Pill status={product.active ? "active" : "inactive"} />
-                  </div>
-                  <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-slate-400">
-                    <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.annual_interest_rate}%</span>Interest</div>
-                    <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{formatMoney(product.admin_fee_cents)}</span>Admin fee</div>
-                    <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.penalty_rate}%</span>Penalty</div>
-                  </div>
+            <Panel title="Operating rules" subtitle="Plain-English guardrails for the finance admin.">
+              <div className="space-y-3 text-sm leading-6 text-slate-300">
+                <div className="rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-4">
+                  <p className="font-black text-emerald-100">Ledger-first</p>
+                  <p className="mt-1">Balances are calculated from transactions. Do not edit balances directly.</p>
                 </div>
-              ))}
-              {data.loanProducts.length === 0 ? <Empty label="No loan products yet." /> : null}
-            </div>
-          </Panel>
-        </section>
+                <div className="rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4 text-yellow-50">
+                  <p className="font-black">Before real-money use</p>
+                  <p className="mt-1">Confirm member agreements, POPIA controls, accounting/tax treatment and lending compliance.</p>
+                </div>
+                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <p className="font-black text-white">Arrears watch</p>
+                  <p className="mt-1">Current overdue scheduled amount: <span className="font-black text-rose-100">{formatMoney(metrics.arrears)}</span></p>
+                </div>
+              </div>
+            </Panel>
+          </section>
+        ) : null}
 
-        <section className="grid gap-6 xl:grid-cols-3">
-          <Panel title="Create member and wallet" subtitle="Creates a protected member row and linked DGB wallet account.">
-            <form onSubmit={createMember} className="grid gap-3">
-              <Field name="member_number" label="Member number" placeholder="DGB-0001" />
-              <Field name="account_number" label="Account number" placeholder="DGB-0001-WALLET" />
-              <Field name="full_name" label="Full name" placeholder="Member full name" required />
-              <Field name="email" label="Email" placeholder="member@example.com" type="email" required />
-              <Field name="phone" label="Phone" placeholder="+27..." />
-              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950" type="submit">
-                <Plus className="h-4 w-4" /> Create member
-              </button>
-            </form>
-          </Panel>
+        {activeSection === "members" ? (
+          <div className="space-y-5">
+            <Panel title="Pending member logins" subtitle="People who can sign in but still need a DGB member profile.">
+              <div className="space-y-4">
+                {pendingMemberLogins.length === 0 ? <Empty label="No member logins are waiting to be linked." /> : null}
+                {pendingMemberLogins.map((user) => {
+                  const matchingMember = unlinkedMembers.find((member) => member.email.toLowerCase() === user.email.toLowerCase());
+                  const defaultMemberNumber = `DGB-${user.id.slice(0, 8).toUpperCase()}`;
+                  const defaultName = user.full_name || user.email.split("@")[0];
 
-          <Panel title="Link member login" subtitle="Connects a registered login email to an existing member profile.">
-            <form onSubmit={linkMemberToUser} className="grid gap-3">
-              <label className="block text-sm font-black text-slate-200">
-                Member
-                <select name="member_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="">Select member</option>
-                  {data.members.map((member) => (
-                    <option key={member.id} value={member.id} className="bg-slate-950">
-                      {member.full_name} · {member.user_id ? "linked" : "not linked"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Field name="user_email" label="Registered login email" placeholder="member@example.com" type="email" required />
-              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-black text-slate-950" type="submit">
-                <Link2 className="h-4 w-4" /> Link login
-              </button>
-            </form>
-          </Panel>
+                  return (
+                    <div key={user.id} className="rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-xs font-black uppercase tracking-[0.18em] text-yellow-100">Waiting for profile</p>
+                          <h3 className="mt-2 text-xl font-black text-white">{defaultName}</h3>
+                          <p className="mt-1 text-sm text-yellow-50/80">{user.email}</p>
+                        </div>
+                        <Pill status="pending" />
+                      </div>
 
-          <Panel title="Set user role" subtitle="Only super admins can promote finance admins or viewers.">
-            <form onSubmit={setUserRole} className="grid gap-3">
-              <label className="block text-sm font-black text-slate-200">
-                Login user
-                <select name="user_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="">Select user</option>
-                  {data.users.map((user) => (
-                    <option key={user.id} value={user.id} className="bg-slate-950">
-                      {user.full_name} · {user.email} · {user.role.replace("_", " ")}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm font-black text-slate-200">
-                Role
-                <select name="role" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="member" className="bg-slate-950">Member</option>
-                  <option value="viewer" className="bg-slate-950">Viewer</option>
-                  <option value="finance_admin" className="bg-slate-950">Finance admin</option>
-                  <option value="super_admin" className="bg-slate-950">Super admin</option>
-                </select>
-              </label>
-              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-yellow-300 px-5 text-sm font-black text-slate-950" type="submit">
-                <UserCheck className="h-4 w-4" /> Update role
-              </button>
-            </form>
-          </Panel>
-        </section>
+                      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                        <form onSubmit={(event) => createMemberFromLogin(event, user)} className="grid gap-3 rounded-3xl border border-white/10 bg-black/15 p-4 sm:grid-cols-2">
+                          <p className="text-sm font-black text-white sm:col-span-2">Create a new member for this login</p>
+                          <Field name="member_number" label="Member number" placeholder={defaultMemberNumber} />
+                          <Field name="full_name" label="Full name" placeholder={defaultName} />
+                          <Field name="phone" label="Phone" placeholder="+27..." />
+                          <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
+                            <Plus className="h-4 w-4" /> Create member + wallet
+                          </button>
+                        </form>
 
-        <section className="grid gap-6 xl:grid-cols-2">
-          <Panel title="Capture contribution" subtitle="Posts an immutable contribution transaction and contribution record atomically.">
-            <form onSubmit={captureContribution} className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
-                Member wallet
-                <select name="account_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="">Select account</option>
-                  {data.accounts.map((account) => (
-                    <option key={account.id} value={account.id} className="bg-slate-950">
-                      {memberName(account.member_id, data.members)} · {account.account_number}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Field name="amount" label="Amount" placeholder="1500.00" required />
-              <Field name="reference" label="Bank reference" placeholder="EFT-REF-001" required />
-              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
-                Memo
-                <textarea name="memo" placeholder="Optional note" className="mt-2 min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none" />
-              </label>
-              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-yellow-300 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
-                <Banknote className="h-4 w-4" /> Capture contribution
-              </button>
-            </form>
-          </Panel>
+                        <form onSubmit={linkMemberToUser} className="grid gap-3 rounded-3xl border border-white/10 bg-black/15 p-4">
+                          <input type="hidden" name="user_email" value={user.email} />
+                          <p className="text-sm font-black text-white">Or link to an existing member</p>
+                          <label className="block text-sm font-black text-slate-200">
+                            Existing unlinked member
+                            <select name="member_id" required defaultValue={matchingMember?.id ?? ""} className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                              <option value="">Select member</option>
+                              {unlinkedMembers.map((member) => (
+                                <option key={member.id} value={member.id} className="bg-slate-950">
+                                  {member.full_name} · {member.email}{member.email.toLowerCase() === user.email.toLowerCase() ? " · email match" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-black text-slate-950" type="submit">
+                            <Link2 className="h-4 w-4" /> Link selected member
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Panel>
 
-          <Panel title="Capture repayment" subtitle="Applies payment to the oldest unpaid schedule rows and posts repayment ledger entries.">
-            <form onSubmit={captureRepayment} className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
-                Open loan
-                <select name="loan_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="">Select loan</option>
-                  {openLoans.map((loan) => (
-                    <option key={loan.id} value={loan.id} className="bg-slate-950">
-                      {memberName(loan.member_id, data.members)} · {formatMoney(loan.principal_cents)} · {loan.status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Field name="amount" label="Amount" placeholder="1000.00" required />
-              <Field name="reference" label="Payment reference" placeholder="EFT-REPAY-001" required />
-              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
-                Memo
-                <textarea name="memo" placeholder="Optional note" className="mt-2 min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none" />
-              </label>
-              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
-                <CheckCircle2 className="h-4 w-4" /> Capture repayment
-              </button>
-            </form>
-          </Panel>
-        </section>
+            <section className="grid gap-5 xl:grid-cols-3">
+              <Panel title="Create member" subtitle="Use this when the member profile should exist before they register a login.">
+                <form onSubmit={createMember} className="grid gap-3">
+                  <Field name="member_number" label="Member number" placeholder="DGB-0001" />
+                  <Field name="account_number" label="Account number" placeholder="DGB-0001-WALLET" />
+                  <Field name="full_name" label="Full name" placeholder="Member full name" required />
+                  <Field name="email" label="Email" placeholder="member@example.com" type="email" required />
+                  <Field name="phone" label="Phone" placeholder="+27..." />
+                  <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950" type="submit">
+                    <Plus className="h-4 w-4" /> Create member
+                  </button>
+                </form>
+              </Panel>
 
-        <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          <Panel title="Members and balances" subtitle="Balances are calculated from member_account_balances, not typed manually.">
+              <Panel title="Link login" subtitle="Connect a registered email to an existing member profile.">
+                <form onSubmit={linkMemberToUser} className="grid gap-3">
+                  <label className="block text-sm font-black text-slate-200">
+                    Member
+                    <select name="member_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                      <option value="">Select member</option>
+                      {data.members.map((member) => (
+                        <option key={member.id} value={member.id} className="bg-slate-950">
+                          {member.full_name} · {member.user_id ? "linked" : "not linked"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <Field name="user_email" label="Registered login email" placeholder="member@example.com" type="email" required />
+                  <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-black text-slate-950" type="submit">
+                    <Link2 className="h-4 w-4" /> Link login
+                  </button>
+                </form>
+              </Panel>
+
+              <Panel title="User role" subtitle="Promote finance admins or viewers. Super admin only.">
+                <form onSubmit={setUserRole} className="grid gap-3">
+                  <label className="block text-sm font-black text-slate-200">
+                    Login user
+                    <select name="user_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                      <option value="">Select user</option>
+                      {data.users.map((user) => (
+                        <option key={user.id} value={user.id} className="bg-slate-950">
+                          {user.full_name} · {user.email} · {user.role.replace("_", " ")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block text-sm font-black text-slate-200">
+                    Role
+                    <select name="role" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                      <option value="member" className="bg-slate-950">Member</option>
+                      <option value="viewer" className="bg-slate-950">Viewer</option>
+                      <option value="finance_admin" className="bg-slate-950">Finance admin</option>
+                      <option value="super_admin" className="bg-slate-950">Super admin</option>
+                    </select>
+                  </label>
+                  <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-yellow-300 px-5 text-sm font-black text-slate-950" type="submit">
+                    <UserCheck className="h-4 w-4" /> Update role
+                  </button>
+                </form>
+              </Panel>
+            </section>
+
+            <Panel title="Members and balances" subtitle="One clean list of every member, login status, wallet and earned interest.">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[980px] text-left text-sm">
+                  <thead className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    <tr>
+                      <th className="px-3 py-3">Member</th>
+                      <th className="px-3 py-3">Contact</th>
+                      <th className="px-3 py-3">Login</th>
+                      <th className="px-3 py-3">Account</th>
+                      <th className="px-3 py-3">Balance</th>
+                      <th className="px-3 py-3">Interest earned</th>
+                      <th className="px-3 py-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {data.members.map((member) => {
+                      const account = data.accounts.find((item) => item.member_id === member.id);
+                      const balance = data.balances.find((item) => item.member_id === member.id)?.balance_cents ?? 0;
+                      const interestEarned = data.interestEarnings.find((item) => item.member_id === member.id)?.interest_earned_cents ?? 0;
+                      const linkedUser = data.users.find((user) => user.id === member.user_id);
+                      return (
+                        <tr key={member.id}>
+                          <td className="px-3 py-4 font-black text-white">{member.full_name}<br /><span className="text-xs font-bold text-slate-500">{member.member_number}</span></td>
+                          <td className="px-3 py-4 text-slate-300">{member.email}<br />{member.phone ?? "—"}</td>
+                          <td className="px-3 py-4 text-slate-300">{linkedUser ? <Pill status={linkedUser.role} /> : <span className="text-slate-500">Not linked</span>}</td>
+                          <td className="px-3 py-4 text-slate-300">{account?.account_number ?? "No wallet yet"}</td>
+                          <td className="px-3 py-4 font-black text-emerald-200">{formatMoney(balance)}</td>
+                          <td className="px-3 py-4 font-black text-yellow-100">{formatMoney(interestEarned)}</td>
+                          <td className="px-3 py-4"><Pill status={member.status} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
+          </div>
+        ) : null}
+
+        {activeSection === "money" ? (
+          <section className="grid gap-5 xl:grid-cols-[1fr_1fr_0.7fr]">
+            <Panel title="Capture contribution" subtitle="Money received from a member into the DGB pool.">
+              <form onSubmit={captureContribution} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <label className="block text-sm font-black text-slate-200 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                  Member wallet
+                  <select name="account_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                    <option value="">Select account</option>
+                    {data.accounts.map((account) => (
+                      <option key={account.id} value={account.id} className="bg-slate-950">
+                        {memberName(account.member_id, data.members)} · {account.account_number}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Field name="amount" label="Amount" placeholder="1500.00" required />
+                <Field name="reference" label="Bank reference" placeholder="EFT-REF-001" required />
+                <label className="block text-sm font-black text-slate-200 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                  Memo
+                  <textarea name="memo" placeholder="Optional note" className="mt-2 min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none" />
+                </label>
+                <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-yellow-300 px-5 text-sm font-black text-slate-950 sm:col-span-2 xl:col-span-1 2xl:col-span-2" type="submit">
+                  <Banknote className="h-4 w-4" /> Capture contribution
+                </button>
+              </form>
+            </Panel>
+
+            <Panel title="Capture repayment" subtitle="Loan payment received from a borrower.">
+              <form onSubmit={captureRepayment} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <label className="block text-sm font-black text-slate-200 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                  Open loan
+                  <select name="loan_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                    <option value="">Select loan</option>
+                    {openLoans.map((loan) => (
+                      <option key={loan.id} value={loan.id} className="bg-slate-950">
+                        {memberName(loan.member_id, data.members)} · {formatMoney(loan.principal_cents)} · {loan.status}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Field name="amount" label="Amount" placeholder="1000.00" required />
+                <Field name="reference" label="Payment reference" placeholder="EFT-REPAY-001" required />
+                <label className="block text-sm font-black text-slate-200 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                  Memo
+                  <textarea name="memo" placeholder="Optional note" className="mt-2 min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none" />
+                </label>
+                <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2 xl:col-span-1 2xl:col-span-2" type="submit">
+                  <CheckCircle2 className="h-4 w-4" /> Capture repayment
+                </button>
+              </form>
+            </Panel>
+
+            <Panel title="Money summary" subtitle="Use this as a quick sanity check before posting transactions.">
+              <div className="space-y-3">
+                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <p className="text-sm text-slate-400">Available cash</p>
+                  <p className="mt-1 text-2xl font-black text-emerald-200">{formatMoney(metrics.availableCash)}</p>
+                </div>
+                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <p className="text-sm text-slate-400">Open loans</p>
+                  <p className="mt-1 text-2xl font-black text-white">{openLoans.length}</p>
+                </div>
+                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <p className="text-sm text-slate-400">Interest already shared</p>
+                  <p className="mt-1 text-2xl font-black text-yellow-100">{formatMoney(metrics.interestDistributed)}</p>
+                </div>
+              </div>
+            </Panel>
+          </section>
+        ) : null}
+
+        {activeSection === "loans" ? (
+          <div className="space-y-5">
+            <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+              <Panel title="Loan requests" subtitle="Review borrower requests. Approval takes principal from pooled cash and shares future interest.">
+                <div className="space-y-3">
+                  {data.loanRequests.length === 0 ? <Empty label="No loan requests yet." /> : null}
+                  {data.loanRequests.map((request) => {
+                    const product = data.loanProducts.find((item) => item.id === request.loan_product_id);
+                    return (
+                      <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-black text-white">{memberName(request.member_id, data.members)}</p>
+                            <p className="mt-1 text-sm text-slate-400">
+                              {formatMoney(request.requested_amount_cents)} over {request.requested_term_months} months
+                              {product ? ` · ${product.name} @ ${product.annual_interest_rate}%` : ""}
+                            </p>
+                          </div>
+                          <Pill status={request.status} />
+                        </div>
+                        <p className="mt-3 text-sm leading-6 text-slate-300">{request.purpose}</p>
+                        <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
+                        {request.status === "pending" ? (
+                          <div className="mt-4 space-y-3">
+                            <form onSubmit={(event) => approveLoanRequest(event, request)} className="grid gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-3 sm:grid-cols-2">
+                              <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
+                                Annual rate %
+                                <input
+                                  name="annual_interest_rate"
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  required
+                                  defaultValue={product?.annual_interest_rate ?? 0}
+                                  className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
+                                />
+                              </label>
+                              <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
+                                Admin fee
+                                <input
+                                  name="admin_fee"
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  defaultValue={product ? Number(product.admin_fee_cents) / 100 : 0}
+                                  className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
+                                />
+                              </label>
+                              <button type="submit" className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100 sm:col-span-2">
+                                Approve loan
+                              </button>
+                            </form>
+                            <button type="button" onClick={() => rejectLoanRequest(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
+                              Reject request
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </Panel>
+
+              <Panel title="Loan products and rates" subtitle="Set default loan rates, fees and terms.">
+                <form onSubmit={upsertLoanProduct} className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-sm font-black text-slate-200 sm:col-span-2">
+                    Existing product
+                    <select name="product_id" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                      <option value="">Create new product / update by name</option>
+                      {data.loanProducts.map((product) => (
+                        <option key={product.id} value={product.id} className="bg-slate-950">
+                          {product.name} · {product.annual_interest_rate}% · {product.max_term_months} months · {product.active ? "active" : "inactive"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <Field name="name" label="Product name" placeholder="Family Relief" required />
+                  <Field name="annual_interest_rate" label="Annual interest rate %" placeholder="12" required />
+                  <label className="block text-sm font-black text-slate-200">
+                    Interest method
+                    <select name="interest_method" required defaultValue="reducing_balance" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                      <option value="reducing_balance" className="bg-slate-950">Reducing balance</option>
+                      <option value="simple" className="bg-slate-950">Simple</option>
+                    </select>
+                  </label>
+                  <Field name="max_term_months" label="Max term months" placeholder="24" type="number" required />
+                  <Field name="admin_fee" label="Admin fee" placeholder="250.00" />
+                  <Field name="penalty_rate" label="Penalty rate %" placeholder="2" />
+                  <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-black text-slate-200">
+                    <input name="active" type="checkbox" defaultChecked className="h-4 w-4 accent-emerald-400" /> Active product
+                  </label>
+                  <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
+                    <Percent className="h-4 w-4" /> Save product rate
+                  </button>
+                </form>
+              </Panel>
+            </section>
+
+            <Panel title="Current lending products" subtitle="These are the loan options members see when requesting finance.">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {data.loanProducts.map((product) => (
+                  <div key={product.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-black text-white">{product.name}</p>
+                        <p className="mt-1 text-sm text-slate-400">{product.interest_method.replace("_", " ")} · max {product.max_term_months} months</p>
+                      </div>
+                      <Pill status={product.active ? "active" : "inactive"} />
+                    </div>
+                    <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-slate-400">
+                      <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.annual_interest_rate}%</span>Interest</div>
+                      <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{formatMoney(product.admin_fee_cents)}</span>Admin fee</div>
+                      <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.penalty_rate}%</span>Penalty</div>
+                    </div>
+                  </div>
+                ))}
+                {data.loanProducts.length === 0 ? <Empty label="No loan products yet." /> : null}
+              </div>
+            </Panel>
+          </div>
+        ) : null}
+
+        {activeSection === "ledger" ? (
+          <Panel title="Recent ledger transactions" subtitle="Immutable movement log. Corrections must be posted as reversing entries.">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-left text-sm">
+              <table className="w-full min-w-[820px] text-left text-sm">
                 <thead className="text-xs uppercase tracking-[0.18em] text-slate-500">
                   <tr>
+                    <th className="px-3 py-3">Date</th>
                     <th className="px-3 py-3">Member</th>
-                    <th className="px-3 py-3">Contact</th>
-                    <th className="px-3 py-3">Login</th>
-                    <th className="px-3 py-3">Account</th>
-                    <th className="px-3 py-3">Balance</th>
-                    <th className="px-3 py-3">Interest earned</th>
-                    <th className="px-3 py-3">Status</th>
+                    <th className="px-3 py-3">Kind</th>
+                    <th className="px-3 py-3">Reference</th>
+                    <th className="px-3 py-3">Direction</th>
+                    <th className="px-3 py-3 text-right">Amount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
-                  {data.members.map((member) => {
-                    const account = data.accounts.find((item) => item.member_id === member.id);
-                    const balance = data.balances.find((item) => item.member_id === member.id)?.balance_cents ?? 0;
-                    const interestEarned = data.interestEarnings.find((item) => item.member_id === member.id)?.interest_earned_cents ?? 0;
-                    const linkedUser = data.users.find((user) => user.id === member.user_id);
-                    return (
-                      <tr key={member.id}>
-                        <td className="px-3 py-4 font-black text-white">{member.full_name}<br /><span className="text-xs font-bold text-slate-500">{member.member_number}</span></td>
-                        <td className="px-3 py-4 text-slate-300">{member.email}<br />{member.phone ?? "—"}</td>
-                        <td className="px-3 py-4 text-slate-300">{linkedUser ? <Pill status={linkedUser.role} /> : <span className="text-slate-500">Not linked</span>}</td>
-                        <td className="px-3 py-4 text-slate-300">{account?.account_number ?? "No wallet yet"}</td>
-                        <td className="px-3 py-4 font-black text-emerald-200">{formatMoney(balance)}</td>
-                        <td className="px-3 py-4 font-black text-yellow-100">{formatMoney(interestEarned)}</td>
-                        <td className="px-3 py-4"><Pill status={member.status} /></td>
-                      </tr>
-                    );
-                  })}
+                  {data.transactions.length === 0 ? (
+                    <tr><td className="px-3 py-6 text-slate-400" colSpan={6}>No ledger entries captured yet.</td></tr>
+                  ) : null}
+                  {data.transactions.map((transaction) => (
+                    <tr key={transaction.id}>
+                      <td className="px-3 py-4 text-slate-400">{shortDate(transaction.captured_at)}</td>
+                      <td className="px-3 py-4 text-white">{memberName(transaction.member_id, data.members)}</td>
+                      <td className="px-3 py-4 capitalize text-slate-300">{transaction.kind.replace("_", " ")}</td>
+                      <td className="px-3 py-4 text-slate-300">{transaction.reference}</td>
+                      <td className="px-3 py-4"><Pill status={transaction.direction} /></td>
+                      <td className="px-3 py-4 text-right font-black text-white">{formatMoney(transaction.amount_cents)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </Panel>
-
-          <Panel title="Loan requests" subtitle="Approve creates a loan, disbursement transaction and schedule.">
-            <div className="space-y-3">
-              {data.loanRequests.length === 0 ? <Empty label="No loan requests yet." /> : null}
-              {data.loanRequests.map((request) => {
-                const product = data.loanProducts.find((item) => item.id === request.loan_product_id);
-                return (
-                  <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-black text-white">{memberName(request.member_id, data.members)}</p>
-                        <p className="mt-1 text-sm text-slate-400">
-                          {formatMoney(request.requested_amount_cents)} over {request.requested_term_months} months
-                          {product ? ` · ${product.name} @ ${product.annual_interest_rate}%` : ""}
-                        </p>
-                      </div>
-                      <Pill status={request.status} />
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-slate-300">{request.purpose}</p>
-                    <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
-                    {request.status === "pending" ? (
-                      <div className="mt-4 space-y-3">
-                        <form onSubmit={(event) => approveLoanRequest(event, request)} className="grid gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-3 sm:grid-cols-2">
-                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
-                            Annual rate %
-                            <input
-                              name="annual_interest_rate"
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              required
-                              defaultValue={product?.annual_interest_rate ?? 0}
-                              className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
-                            />
-                          </label>
-                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
-                            Admin fee
-                            <input
-                              name="admin_fee"
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              defaultValue={product ? Number(product.admin_fee_cents) / 100 : 0}
-                              className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
-                            />
-                          </label>
-                          <button type="submit" className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100 sm:col-span-2">
-                            Approve with this rate + distribute future interest
-                          </button>
-                        </form>
-                        <button type="button" onClick={() => rejectLoanRequest(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
-                          Reject request
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          </Panel>
-        </section>
-
-        <Panel title="Recent ledger transactions" subtitle="Immutable movement log. Corrections must be posted as reversing entries.">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left text-sm">
-              <thead className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                <tr>
-                  <th className="px-3 py-3">Date</th>
-                  <th className="px-3 py-3">Member</th>
-                  <th className="px-3 py-3">Kind</th>
-                  <th className="px-3 py-3">Reference</th>
-                  <th className="px-3 py-3">Direction</th>
-                  <th className="px-3 py-3 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/10">
-                {data.transactions.length === 0 ? (
-                  <tr><td className="px-3 py-6 text-slate-400" colSpan={6}>No ledger entries captured yet.</td></tr>
-                ) : null}
-                {data.transactions.map((transaction) => (
-                  <tr key={transaction.id}>
-                    <td className="px-3 py-4 text-slate-400">{shortDate(transaction.captured_at)}</td>
-                    <td className="px-3 py-4 text-white">{memberName(transaction.member_id, data.members)}</td>
-                    <td className="px-3 py-4 capitalize text-slate-300">{transaction.kind.replace("_", " ")}</td>
-                    <td className="px-3 py-4 text-slate-300">{transaction.reference}</td>
-                    <td className="px-3 py-4"><Pill status={transaction.direction} /></td>
-                    <td className="px-3 py-4 text-right font-black text-white">{formatMoney(transaction.amount_cents)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
+        ) : null}
       </div>
     </div>
   );
