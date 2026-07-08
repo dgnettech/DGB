@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  AlertTriangle,
   Banknote,
   CheckCircle2,
   ClipboardCheck,
@@ -68,7 +69,16 @@ const emptyData: AdminData = {
   profileChangeRequests: [],
 };
 
-type AdminSection = "overview" | "members" | "money" | "loans" | "ledger";
+type AdminSection = "overview" | "members" | "money" | "loans" | "ledger" | "controls";
+type ReconciliationSeverity = "clear" | "attention" | "critical";
+type ReconciliationCheck = {
+  id: string;
+  label: string;
+  value: string;
+  detail: string;
+  severity: ReconciliationSeverity;
+  actionSection: AdminSection;
+};
 
 const adminSections: { id: AdminSection; label: string; hint: string }[] = [
   { id: "overview", label: "Overview", hint: "What needs attention" },
@@ -76,6 +86,7 @@ const adminSections: { id: AdminSection; label: string; hint: string }[] = [
   { id: "money", label: "Money", hint: "Contributions and repayments" },
   { id: "loans", label: "Loans", hint: "Requests and custom offers" },
   { id: "ledger", label: "Ledger", hint: "Recent transactions" },
+  { id: "controls", label: "Controls", hint: "Reconciliation checks" },
 ];
 
 export default function AdminPage() {
@@ -437,8 +448,11 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
   const pendingProfileChanges = data.profileChangeRequests.filter((request) => request.status === "pending");
   const membersMissingIdentity = data.members.filter((member) => !member.id_passport_number || !member.next_of_kin_name || !member.next_of_kin_phone);
   const membersWithoutIdDocument = data.members.filter((member) => !data.documents.some((document) => document.member_id === member.id && document.kind === "id_document"));
+  const reconciliationChecks = buildReconciliationChecks(data);
+  const reconciliationExceptionCount = reconciliationChecks.filter((check) => check.severity !== "clear").length;
+  const criticalReconciliationCount = reconciliationChecks.filter((check) => check.severity === "critical").length;
   const linkedMemberCount = data.members.filter((member) => member.user_id).length;
-  const pendingActionCount = pendingMemberLogins.length + pendingLoanRequests.length + pendingProfileChanges.length + metrics.arrearsCount;
+  const pendingActionCount = pendingMemberLogins.length + pendingLoanRequests.length + pendingProfileChanges.length + metrics.arrearsCount + reconciliationExceptionCount;
   const liquidityAfterOffers = metrics.availableCash - pendingOfferExposure;
   const controlChecks = [
     {
@@ -465,6 +479,12 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       detail: "Mimics bank onboarding checks before larger lending exposure.",
       tone: membersMissingIdentity.length === 0 && membersWithoutIdDocument.length === 0 ? "clear" : "attention",
     },
+    {
+      label: "Reconciliation exceptions",
+      value: reconciliationExceptionCount === 0 ? "Clear" : `${reconciliationExceptionCount} open`,
+      detail: criticalReconciliationCount > 0 ? `${criticalReconciliationCount} critical control issue${criticalReconciliationCount === 1 ? "" : "s"} need review.` : "Ledger, account and member control checks are clean.",
+      tone: criticalReconciliationCount > 0 ? "critical" : reconciliationExceptionCount > 0 ? "attention" : "clear",
+    },
   ] as const;
   const sectionAlertCounts: Record<AdminSection, number> = {
     overview: pendingActionCount,
@@ -472,6 +492,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     money: 0,
     loans: pendingLoanRequests.length + offersAwaitingAcceptance.length,
     ledger: metrics.arrearsCount,
+    controls: reconciliationExceptionCount,
   };
 
   return (
@@ -512,7 +533,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
         </section>
 
         <nav className="sticky top-[5.5rem] z-20 rounded-[1.6rem] border border-white/10 bg-[#06111f]/92 p-2 shadow-xl shadow-black/20 backdrop-blur-xl">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
             {adminSections.map((section) => {
               const isActive = activeSection === section.id;
               const count = sectionAlertCounts[section.id];
@@ -600,7 +621,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                   <ControlCheck key={check.label} label={check.label} value={check.value} detail={check.detail} tone={check.tone} />
                 ))}
               </div>
-              <div className="mt-4 grid gap-3 text-sm text-slate-300 lg:grid-cols-3">
+              <div className="mt-4 grid gap-3 text-sm text-slate-300 lg:grid-cols-4">
                 <button type="button" onClick={() => setActiveSection("members")} className="rounded-3xl border border-white/10 bg-black/15 p-4 text-left hover:bg-white/[0.08]">
                   <ClipboardCheck className="h-5 w-5 text-yellow-100" />
                   <p className="mt-3 font-black text-white">Onboarding queue</p>
@@ -615,6 +636,11 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
                   <FileDown className="h-5 w-5 text-emerald-200" />
                   <p className="mt-3 font-black text-white">Ledger review pack</p>
                   <p className="mt-1">Export the recent immutable transaction window for a daily close/reconciliation file.</p>
+                </button>
+                <button type="button" onClick={() => setActiveSection("controls")} className="rounded-3xl border border-white/10 bg-black/15 p-4 text-left hover:bg-white/[0.08]">
+                  <AlertTriangle className="h-5 w-5 text-yellow-100" />
+                  <p className="mt-3 font-black text-white">Control exceptions</p>
+                  <p className="mt-1">Review {reconciliationExceptionCount} open reconciliation exception{reconciliationExceptionCount === 1 ? "" : "s"} before daily close.</p>
                 </button>
               </div>
             </Panel>
@@ -967,6 +993,35 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
           </div>
         ) : null}
 
+        {activeSection === "controls" ? (
+          <div className="space-y-5">
+            <Panel title="Reconciliation controls" subtitle="Daily close checks for member/account/ledger consistency before anyone relies on the numbers.">
+              <div className="grid gap-3 lg:grid-cols-2">
+                {reconciliationChecks.map((check) => (
+                  <ReconciliationCard key={check.id} check={check} onOpen={() => setActiveSection(check.actionSection)} />
+                ))}
+              </div>
+            </Panel>
+
+            <Panel title="Daily close routine" subtitle="Keep this short and repeatable so finance admin can spot trouble fast.">
+              <div className="grid gap-3 text-sm leading-6 text-slate-300 md:grid-cols-3">
+                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <p className="font-black text-white">1. Clear exceptions</p>
+                  <p className="mt-1">Review critical controls before approving new lending or exporting the day.</p>
+                </div>
+                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <p className="font-black text-white">2. Export ledger</p>
+                  <p className="mt-1">Use the Ledger tab CSV as the immutable movement window for reconciliation.</p>
+                </div>
+                <div className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                  <p className="font-black text-white">3. Recheck cash</p>
+                  <p className="mt-1">Refresh after corrections so available cash and offer exposure are current.</p>
+                </div>
+              </div>
+            </Panel>
+          </div>
+        ) : null}
+
         {activeSection === "ledger" ? (
           <Panel title="Recent ledger transactions" subtitle="Immutable movement log. Corrections must be posted as reversing entries.">
             <div className="mb-4 flex flex-col gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1022,6 +1077,100 @@ function calculateAdminMetrics(data: AdminData) {
   const overdueSchedules = data.schedules.filter((schedule) => schedule.due_date < today && schedule.paid_cents < schedule.amount_due_cents);
   const arrears = overdueSchedules.reduce((total, schedule) => total + (schedule.amount_due_cents - schedule.paid_cents), 0);
   return { availableCash, outstanding, arrears, arrearsCount: overdueSchedules.length, interestDistributed };
+}
+
+function buildReconciliationChecks(data: AdminData): ReconciliationCheck[] {
+  const membersById = new Map(data.members.map((member) => [member.id, member]));
+  const accountsById = new Map(data.accounts.map((account) => [account.id, account]));
+  const accountsByMember = new Map<string, AccountRow[]>();
+  const balancesByMember = new Map<string, number>();
+
+  for (const account of data.accounts) {
+    accountsByMember.set(account.member_id, [...(accountsByMember.get(account.member_id) ?? []), account]);
+  }
+
+  for (const balance of data.balances) {
+    balancesByMember.set(balance.member_id, (balancesByMember.get(balance.member_id) ?? 0) + Number(balance.balance_cents ?? 0));
+  }
+
+  const activeMembersWithoutWallet = data.members.filter((member) => member.status === "active" && !(accountsByMember.get(member.id) ?? []).some((account) => account.status === "active"));
+  const inactiveMembersWithBalance = data.members.filter((member) => member.status !== "active" && Math.abs(balancesByMember.get(member.id) ?? 0) > 0);
+  const activeAccountsForInactiveMembers = data.accounts.filter((account) => account.status === "active" && membersById.get(account.member_id)?.status !== "active");
+  const transactionsWithMissingLinks = data.transactions.filter((transaction) => !membersById.has(transaction.member_id) || !accountsById.has(transaction.account_id));
+  const interestOnInactiveAccounts = data.interestEarnings.filter((earning) => {
+    const member = membersById.get(earning.member_id);
+    const account = accountsById.get(earning.account_id);
+    return Number(earning.interest_earned_cents ?? 0) > 0 && (member?.status !== "active" || account?.status !== "active");
+  });
+  const openLoansForInactiveMembers = data.loans.filter((loan) => ["active", "approved", "overdue"].includes(loan.status) && membersById.get(loan.member_id)?.status !== "active");
+  const referenceGroups = new Map<string, TransactionRow[]>();
+
+  for (const transaction of data.transactions) {
+    if (!transaction.reference || transaction.kind === "reversal") continue;
+    referenceGroups.set(transaction.reference, [...(referenceGroups.get(transaction.reference) ?? []), transaction]);
+  }
+
+  const duplicateReferences = [...referenceGroups.entries()].filter(([, transactions]) => transactions.length > 1);
+  const summarize = (items: string[], empty: string) => (items.length === 0 ? empty : `${items.slice(0, 3).join(", ")}${items.length > 3 ? ` +${items.length - 3} more` : ""}`);
+
+  return [
+    {
+      id: "active-wallet-coverage",
+      label: "Active members have active wallets",
+      value: activeMembersWithoutWallet.length === 0 ? "Clear" : `${activeMembersWithoutWallet.length} gap${activeMembersWithoutWallet.length === 1 ? "" : "s"}`,
+      detail: summarize(activeMembersWithoutWallet.map((member) => member.member_number), "Every active member has an active wallet account."),
+      severity: activeMembersWithoutWallet.length === 0 ? "clear" : "critical",
+      actionSection: "members",
+    },
+    {
+      id: "inactive-zero-balance",
+      label: "Closed/suspended members have zero balance",
+      value: inactiveMembersWithBalance.length === 0 ? "Clear" : `${inactiveMembersWithBalance.length} mismatch${inactiveMembersWithBalance.length === 1 ? "" : "es"}`,
+      detail: summarize(inactiveMembersWithBalance.map((member) => `${member.member_number} ${formatMoney(balancesByMember.get(member.id) ?? 0)}`), "No inactive member is carrying a wallet balance."),
+      severity: inactiveMembersWithBalance.length === 0 ? "clear" : "critical",
+      actionSection: "members",
+    },
+    {
+      id: "inactive-account-status",
+      label: "Inactive members do not have active accounts",
+      value: activeAccountsForInactiveMembers.length === 0 ? "Clear" : `${activeAccountsForInactiveMembers.length} active`,
+      detail: summarize(activeAccountsForInactiveMembers.map((account) => `${account.account_number} (${memberName(account.member_id, data.members)})`), "Closed/suspended members have no active wallet accounts."),
+      severity: activeAccountsForInactiveMembers.length === 0 ? "clear" : "critical",
+      actionSection: "members",
+    },
+    {
+      id: "ledger-links",
+      label: "Recent ledger rows link to live member/account records",
+      value: transactionsWithMissingLinks.length === 0 ? "Clear" : `${transactionsWithMissingLinks.length} row${transactionsWithMissingLinks.length === 1 ? "" : "s"}`,
+      detail: summarize(transactionsWithMissingLinks.map((transaction) => transaction.reference), "Recent transactions all link to known members and accounts."),
+      severity: transactionsWithMissingLinks.length === 0 ? "clear" : "critical",
+      actionSection: "ledger",
+    },
+    {
+      id: "interest-active-only",
+      label: "Interest earnings belong only to active accounts",
+      value: interestOnInactiveAccounts.length === 0 ? "Clear" : `${interestOnInactiveAccounts.length} earning${interestOnInactiveAccounts.length === 1 ? "" : "s"}`,
+      detail: summarize(interestOnInactiveAccounts.map((earning) => `${memberName(earning.member_id, data.members)} ${formatMoney(earning.interest_earned_cents)}`), "No closed/suspended wallet is showing earned interest."),
+      severity: interestOnInactiveAccounts.length === 0 ? "clear" : "critical",
+      actionSection: "ledger",
+    },
+    {
+      id: "open-loans-active-members",
+      label: "Open loans belong to active members",
+      value: openLoansForInactiveMembers.length === 0 ? "Clear" : `${openLoansForInactiveMembers.length} loan${openLoansForInactiveMembers.length === 1 ? "" : "s"}`,
+      detail: summarize(openLoansForInactiveMembers.map((loan) => memberName(loan.member_id, data.members)), "No open loan is assigned to an inactive member."),
+      severity: openLoansForInactiveMembers.length === 0 ? "clear" : "critical",
+      actionSection: "loans",
+    },
+    {
+      id: "duplicate-references",
+      label: "Recent non-reversal references are unique",
+      value: duplicateReferences.length === 0 ? "Clear" : `${duplicateReferences.length} duplicate${duplicateReferences.length === 1 ? "" : "s"}`,
+      detail: summarize(duplicateReferences.map(([reference, transactions]) => `${reference} ×${transactions.length}`), "No duplicate non-reversal references in the recent ledger window."),
+      severity: duplicateReferences.length === 0 ? "clear" : "attention",
+      actionSection: "ledger",
+    },
+  ];
 }
 
 function memberName(memberId: string, members: MemberRow[]) {
@@ -1099,6 +1248,37 @@ function ControlCheck({ label, value, detail, tone }: { label: string; value: st
         <span className="rounded-full bg-black/20 px-3 py-1 text-xs font-black text-white">{value}</span>
       </div>
       <p className="mt-3 text-sm leading-6 text-slate-200">{detail}</p>
+    </div>
+  );
+}
+
+function ReconciliationCard({ check, onOpen }: { check: ReconciliationCheck; onOpen: () => void }) {
+  const toneClass = check.severity === "clear"
+    ? "border-emerald-300/20 bg-emerald-400/10"
+    : check.severity === "attention"
+      ? "border-yellow-300/20 bg-yellow-300/10"
+      : "border-rose-300/20 bg-rose-400/10";
+  const badgeClass = check.severity === "clear"
+    ? "bg-emerald-400/15 text-emerald-100"
+    : check.severity === "attention"
+      ? "bg-yellow-300/15 text-yellow-100"
+      : "bg-rose-400/15 text-rose-100";
+
+  return (
+    <div className={`rounded-3xl border p-4 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className={`mt-0.5 h-5 w-5 ${check.severity === "clear" ? "text-emerald-200" : check.severity === "attention" ? "text-yellow-100" : "text-rose-100"}`} />
+          <div>
+            <p className="font-black text-white">{check.label}</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">{check.detail}</p>
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-black ${badgeClass}`}>{check.value}</span>
+      </div>
+      <button type="button" onClick={onOpen} className="mt-4 rounded-full border border-white/10 bg-black/20 px-4 py-2 text-xs font-black text-white hover:bg-white/[0.08]">
+        Review source area
+      </button>
     </div>
   );
 }

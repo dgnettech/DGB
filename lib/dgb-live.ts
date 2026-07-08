@@ -61,11 +61,14 @@ export type TransactionRow = {
   account_id: string;
   member_id: string;
   loan_id: string | null;
+  schedule_id: string | null;
   kind: string;
   direction: "credit" | "debit";
   amount_cents: number;
   reference: string;
   memo: string | null;
+  reversal_of: string | null;
+  captured_by: string | null;
   captured_at: string;
 };
 

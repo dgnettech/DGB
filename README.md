@@ -9,7 +9,7 @@ Private internal banking and loan-management platform for **DGB — Dunne Group 
 This repository currently includes the Phase 1/2 foundation:
 
 - Modern private-banking style dashboard UI.
-- Admin portal overview for member accounts, fund totals, loans, arrears, documents and audit trail.
+- Admin portal overview and Controls workspace for member accounts, fund totals, loans, arrears, documents, reconciliation exceptions and audit trail.
 - Member portal preview for balances, repayment schedules, loan requests, approval-offer review, statement export, documents and notifications.
 - Ledger-first financial model: balances are calculated from transactions, not manually typed.
 - Simple-interest and reducing-balance repayment schedule calculations.
@@ -76,6 +76,7 @@ supabase/migrations/202607080001_dgb_pool_interest_distribution.sql
 supabase/migrations/202607080002_dgb_auto_confirm_auth_emails.sql
 supabase/migrations/202607080003_dgb_negotiated_loan_offers.sql
 supabase/migrations/202607080004_dgb_profile_change_reviews.sql
+supabase/migrations/202607080005_dgb_interest_reversal_netting.sql
 ```
 
 The migration creates the MVP tables:
@@ -111,7 +112,7 @@ Additional live-operation helpers:
 - RPC: `review_profile_change_request(...)` — admin maker-checker approval applies member profile updates atomically
 - RPC: `capture_repayment(...)`
 - Internal RPC: `distribute_loan_interest(...)`
-- RLS-safe `member_interest_earnings` view
+- RLS-safe reversal-aware `member_interest_earnings` view
 
 Security foundations included:
 
@@ -126,11 +127,11 @@ Security foundations included:
 - Deletion guards on member and financial records.
 - Audit triggers for inserts/updates/deletes across operational tables.
 - RLS-safe `member_account_balances` view.
-- RLS-safe `member_interest_earnings` view for each member's distributed loan-interest income.
+- RLS-safe reversal-aware `member_interest_earnings` view for each member's distributed loan-interest income.
 
 ## Next build phase
 
-The live Supabase Auth shell, first-admin bootstrap, admin dashboard, member dashboard, bank-style operations cockpit, CSV statement/export paths, document upload path, member linking, contribution capture, negotiated loan offers, member acceptance, maker-checker profile-change review and repayment capture are now in place. The next implementation pass should add:
+The live Supabase Auth shell, first-admin bootstrap, admin dashboard, member dashboard, bank-style operations cockpit, Controls reconciliation workspace, CSV statement/export paths, document upload path, member linking, contribution capture, negotiated loan offers, member acceptance, maker-checker profile-change review and repayment capture are now in place. The next implementation pass should add:
 
 1. Signed document download links, PDF statements and agreements.
 2. Email notifications for approvals, repayment reminders and overdue alerts.
