@@ -128,6 +128,11 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
   }, [loadData]);
 
   const metrics = useMemo(() => calculateAdminMetrics(data), [data]);
+  const unlinkedMembers = useMemo(() => data.members.filter((member) => !member.user_id), [data.members]);
+  const pendingMemberLogins = useMemo(
+    () => data.users.filter((user) => user.role === "member" && !data.members.some((member) => member.user_id === user.id)),
+    [data.members, data.users],
+  );
 
   async function createMember(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -161,6 +166,35 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
 
     event.currentTarget.reset();
     setMessage(`Created ${fullName} and wallet account ${accountNumber}. If a login exists with that email, it was linked automatically.`);
+    await loadData();
+  }
+
+  async function createMemberFromLogin(event: React.FormEvent<HTMLFormElement>, user: DgbProfile) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+    const form = new FormData(event.currentTarget);
+    const memberNumber = String(form.get("member_number") ?? "").trim() || `DGB-${user.id.slice(0, 8).toUpperCase()}`;
+    const fullName = String(form.get("full_name") ?? "").trim() || user.full_name || user.email;
+    const phone = String(form.get("phone") ?? "").trim();
+    const accountNumber = `${memberNumber}-WALLET`;
+
+    const { error: rpcError } = await supabase.rpc("create_member_with_account", {
+      p_member_number: memberNumber,
+      p_full_name: fullName,
+      p_email: user.email,
+      p_phone: phone || null,
+      p_account_number: accountNumber,
+      p_created_by: profile.id,
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setMessage(`Created and linked member profile for ${user.email}. They can now open the member portal.`);
     await loadData();
   }
 
@@ -416,6 +450,61 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
 
         {message ? <Notice tone="success" message={message} /> : null}
         {error ? <Notice tone="error" message={error} /> : null}
+
+        <Panel title="Pending member logins" subtitle="These people can sign in, but their member portal will stay pending until you create or link a member profile here.">
+          <div className="space-y-4">
+            {pendingMemberLogins.length === 0 ? <Empty label="No member logins are waiting to be linked." /> : null}
+            {pendingMemberLogins.map((user) => {
+              const matchingMember = unlinkedMembers.find((member) => member.email.toLowerCase() === user.email.toLowerCase());
+              const defaultMemberNumber = `DGB-${user.id.slice(0, 8).toUpperCase()}`;
+              const defaultName = user.full_name || user.email.split("@")[0];
+
+              return (
+                <div key={user.id} className="rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-black uppercase tracking-[0.18em] text-yellow-100">Waiting for member profile</p>
+                      <h3 className="mt-2 text-xl font-black text-white">{defaultName}</h3>
+                      <p className="mt-1 text-sm text-yellow-50/80">{user.email}</p>
+                    </div>
+                    <Pill status="pending" />
+                  </div>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                    <form onSubmit={(event) => createMemberFromLogin(event, user)} className="grid gap-3 rounded-3xl border border-white/10 bg-black/15 p-4 sm:grid-cols-2">
+                      <p className="text-sm font-black text-white sm:col-span-2">Option 1 — create a new member + wallet for this login</p>
+                      <Field name="member_number" label="Member number" placeholder={defaultMemberNumber} />
+                      <Field name="full_name" label="Full name" placeholder={defaultName} />
+                      <Field name="phone" label="Phone" placeholder="+27..." />
+                      <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
+                        <Plus className="h-4 w-4" /> Create member + link login
+                      </button>
+                    </form>
+
+                    <form onSubmit={linkMemberToUser} className="grid gap-3 rounded-3xl border border-white/10 bg-black/15 p-4">
+                      <input type="hidden" name="user_email" value={user.email} />
+                      <p className="text-sm font-black text-white">Option 2 — link to an existing member</p>
+                      <label className="block text-sm font-black text-slate-200">
+                        Existing unlinked member
+                        <select name="member_id" required defaultValue={matchingMember?.id ?? ""} className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
+                          <option value="">Select member</option>
+                          {unlinkedMembers.map((member) => (
+                            <option key={member.id} value={member.id} className="bg-slate-950">
+                              {member.full_name} · {member.email}{member.email.toLowerCase() === user.email.toLowerCase() ? " · email match" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-black text-slate-950" type="submit">
+                        <Link2 className="h-4 w-4" /> Link selected member
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard icon={PiggyBank} label="Available cash" value={formatMoney(metrics.availableCash)} detail="Credits less debits in the ledger" />
