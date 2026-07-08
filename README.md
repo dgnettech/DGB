@@ -10,11 +10,11 @@ This repository currently includes the Phase 1/2 foundation:
 
 - Modern private-banking style dashboard UI.
 - Admin portal overview for member accounts, fund totals, loans, arrears, documents and audit trail.
-- Member portal preview for balances, repayment schedules, loan actions, statements and notifications.
+- Member portal preview for balances, repayment schedules, loan requests, approval-offer review, statements and notifications.
 - Ledger-first financial model: balances are calculated from transactions, not manually typed.
 - Simple-interest and reducing-balance repayment schedule calculations.
-- Lending-pool interest model: loan principal comes out of pooled cash, and loan interest collected on repayments is distributed proportionally to positive-balance members.
-- Supabase PostgreSQL schema migration with RLS policies, immutable transaction protection, deletion guards, audit triggers and seed loan products.
+- Lending-pool interest model: loan principal comes out of pooled cash only after the member accepts the finance-admin offer, and loan interest collected on repayments is distributed proportionally to positive-balance members.
+- Supabase PostgreSQL schema migration with RLS policies, immutable transaction protection, deletion guards, audit triggers and negotiated loan-offer workflow.
 
 ## Routes
 
@@ -73,6 +73,8 @@ supabase/migrations/202607070001_dgb_mvp_schema.sql
 supabase/migrations/202607070002_dgb_live_operations.sql
 supabase/migrations/202607070003_dgb_bootstrap_loans.sql
 supabase/migrations/202607080001_dgb_pool_interest_distribution.sql
+supabase/migrations/202607080002_dgb_auto_confirm_auth_emails.sql
+supabase/migrations/202607080003_dgb_negotiated_loan_offers.sql
 ```
 
 The migration creates the MVP tables:
@@ -80,7 +82,7 @@ The migration creates the MVP tables:
 - `users`
 - `members`
 - `accounts`
-- `loan_products`
+- `loan_products` _(legacy/internal only; no predefined products, rates or terms are shown to members)_
 - `loan_requests`
 - `profile_change_requests`
 - `loans`
@@ -102,8 +104,9 @@ Additional live-operation helpers:
 - RPC: `bootstrap_status()`
 - RPC: `link_member_to_user(...)`
 - RPC: `set_user_role(...)`
-- RPC: `upsert_loan_product(...)`
-- RPC: `approve_loan_request(...)`
+- RPC: `approve_loan_request(...)` — finance admin sends a custom interest-rate offer
+- RPC: `accept_loan_offer(...)` — member accepts the offer and activates/disburses the loan
+- RPC: `decline_loan_offer(...)` — member declines the offered terms
 - RPC: `capture_repayment(...)`
 - Internal RPC: `distribute_loan_interest(...)`
 - RLS-safe `member_interest_earnings` view
@@ -114,7 +117,7 @@ Security foundations included:
 - Roles: `super_admin`, `finance_admin`, `viewer`, `member`.
 - RLS policies so members can only see their own data.
 - Admin-only financial posting.
-- Member loan requests forced to `pending` on insert.
+- Member loan requests forced to `pending` on insert with no product/rate/term template fields.
 - Member profile change requests captured for admin approval before sensitive details are updated.
 - Member document uploads limited to their own member/loan records.
 - Transaction rows protected from update/delete; corrections must be reversing entries.
@@ -125,7 +128,7 @@ Security foundations included:
 
 ## Next build phase
 
-The live Supabase Auth shell, first-admin bootstrap, admin dashboard, member dashboard, document upload path, member linking, contribution capture, loan approval and repayment capture are now in place. The next implementation pass should add:
+The live Supabase Auth shell, first-admin bootstrap, admin dashboard, member dashboard, document upload path, member linking, contribution capture, negotiated loan offers, member acceptance and repayment capture are now in place. The next implementation pass should add:
 
 1. Signed document download links, PDF statements and agreements.
 2. Email notifications for approvals, repayment reminders and overdue alerts.

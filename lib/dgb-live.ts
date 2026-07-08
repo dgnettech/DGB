@@ -81,12 +81,18 @@ export type LoanRequestRow = {
   status: string;
   submitted_at: string;
   review_notes: string | null;
+  offer_annual_interest_rate: string | number | null;
+  offer_interest_method: LoanInterestMethod | null;
+  offer_admin_fee_cents: number;
+  offer_start_date: string | null;
+  member_accepted_at: string | null;
+  member_decision_notes: string | null;
 };
 
 export type LoanRow = {
   id: string;
   member_id: string;
-  loan_product_id: string;
+  loan_product_id: string | null;
   principal_cents: number;
   annual_interest_rate: string | number;
   interest_method: LoanInterestMethod;
@@ -174,7 +180,7 @@ export function shortDate(value: string | null | undefined) {
 export function statusClassName(status: string) {
   const normalized = status.toLowerCase();
   if (["active", "approved", "paid", "read"].includes(normalized)) return "bg-emerald-400/15 text-emerald-100 ring-emerald-300/20";
-  if (["pending", "due", "part_paid"].includes(normalized)) return "bg-yellow-300/15 text-yellow-100 ring-yellow-200/20";
+  if (["pending", "due", "part_paid", "offer ready", "offer sent"].includes(normalized)) return "bg-yellow-300/15 text-yellow-100 ring-yellow-200/20";
   if (["overdue", "rejected", "suspended"].includes(normalized)) return "bg-rose-400/15 text-rose-100 ring-rose-300/20";
   return "bg-white/10 text-slate-100 ring-white/15";
 }

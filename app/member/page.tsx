@@ -11,7 +11,6 @@ import {
   type DocumentRow,
   formatMoney,
   type InterestEarningRow,
-  type LoanProductRow,
   type LoanRequestRow,
   type LoanRow,
   type MemberRow,
@@ -30,7 +29,6 @@ type MemberData = {
   balances: BalanceRow[];
   interestEarnings: InterestEarningRow[];
   transactions: TransactionRow[];
-  loanProducts: LoanProductRow[];
   loanRequests: LoanRequestRow[];
   loans: LoanRow[];
   schedules: ScheduleRow[];
@@ -44,7 +42,6 @@ const emptyData: MemberData = {
   balances: [],
   interestEarnings: [],
   transactions: [],
-  loanProducts: [],
   loanRequests: [],
   loans: [],
   schedules: [],
@@ -83,25 +80,23 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
 
     const member = memberResult.data ?? null;
     if (!member) {
-      const products = await supabase.from("loan_products").select("*").order("name").returns<LoanProductRow[]>();
-      setData({ ...emptyData, loanProducts: products.data ?? [] });
+      setData(emptyData);
       setLoading(false);
       return;
     }
 
-    const [accounts, balances, interestEarnings, transactions, loanProducts, loanRequests, loans, documents, notifications] = await Promise.all([
+    const [accounts, balances, interestEarnings, transactions, loanRequests, loans, documents, notifications] = await Promise.all([
       supabase.from("accounts").select("*").eq("member_id", member.id).returns<AccountRow[]>(),
       supabase.from("member_account_balances").select("*").eq("member_id", member.id).returns<BalanceRow[]>(),
       supabase.from("member_interest_earnings").select("*").eq("member_id", member.id).returns<InterestEarningRow[]>(),
       supabase.from("transactions").select("*").eq("member_id", member.id).order("captured_at", { ascending: false }).limit(50).returns<TransactionRow[]>(),
-      supabase.from("loan_products").select("*").order("name").returns<LoanProductRow[]>(),
       supabase.from("loan_requests").select("*").eq("member_id", member.id).order("submitted_at", { ascending: false }).returns<LoanRequestRow[]>(),
       supabase.from("loans").select("*").eq("member_id", member.id).order("created_at", { ascending: false }).returns<LoanRow[]>(),
       supabase.from("documents").select("*").eq("member_id", member.id).order("uploaded_at", { ascending: false }).returns<DocumentRow[]>(),
       supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(20).returns<NotificationRow[]>(),
     ]);
 
-    const failed = [accounts, balances, interestEarnings, transactions, loanProducts, loanRequests, loans, documents, notifications].find((result) => result.error);
+    const failed = [accounts, balances, interestEarnings, transactions, loanRequests, loans, documents, notifications].find((result) => result.error);
     if (failed?.error) {
       setError(failed.error.message);
       setLoading(false);
@@ -125,7 +120,6 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
       balances: balances.data ?? [],
       interestEarnings: interestEarnings.data ?? [],
       transactions: transactions.data ?? [],
-      loanProducts: loanProducts.data ?? [],
       loanRequests: loanRequests.data ?? [],
       loans: loans.data ?? [],
       schedules: schedules.data ?? [],
@@ -158,17 +152,16 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
     const form = new FormData(event.currentTarget);
     const amountCents = parseMoneyToCents(form.get("amount"));
     const term = Number(form.get("term_months"));
-    const loanProductId = String(form.get("loan_product_id") ?? "");
     const purpose = String(form.get("purpose") ?? "").trim();
 
-    if (!amountCents || !term || !loanProductId || !purpose) {
-      setError("Loan product, amount, term and purpose are required.");
+    if (!amountCents || !Number.isFinite(term) || term <= 0 || !purpose) {
+      setError("Loan amount, repayment period and purpose are required.");
       return;
     }
 
     const { error: insertError } = await supabase.from("loan_requests").insert({
       member_id: data.member.id,
-      loan_product_id: loanProductId,
+      loan_product_id: null,
       requested_amount_cents: amountCents,
       requested_term_months: term,
       purpose,
@@ -183,7 +176,38 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
     }
 
     event.currentTarget.reset();
-    setMessage("Loan request submitted for admin review.");
+    setMessage("Loan request submitted. A finance admin will review it and send back an interest-rate offer for you to accept or decline.");
+    await loadData();
+  }
+
+  async function acceptLoanOffer(requestId: string) {
+    setMessage(null);
+    setError(null);
+    const { error: rpcError } = await supabase.rpc("accept_loan_offer", { p_request_id: requestId });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    setMessage("Loan offer accepted. Your loan and repayment schedule are now active.");
+    await loadData();
+  }
+
+  async function declineLoanOffer(requestId: string) {
+    setMessage(null);
+    setError(null);
+    const { error: rpcError } = await supabase.rpc("decline_loan_offer", {
+      p_request_id: requestId,
+      p_notes: "Declined from member portal.",
+    });
+
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+
+    setMessage("Loan offer declined. You can submit a new request if you want different terms.");
     await loadData();
   }
 
@@ -308,26 +332,15 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
         </section>
 
         <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
-          <Panel title="Submit loan request" subtitle="Requests remain pending until a finance admin reviews them.">
+          <Panel title="Submit loan request" subtitle="Tell finance how much you want and over what period. They will send back the interest-rate offer for you to accept or decline.">
             <form onSubmit={submitLoanRequest} className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm font-black text-slate-200 sm:col-span-2">
-                Loan product
-                <select name="loan_product_id" required className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                  <option value="">Select product</option>
-                  {data.loanProducts.map((product) => (
-                    <option key={product.id} value={product.id} className="bg-slate-950">
-                      {product.name} · {product.annual_interest_rate}% · {product.max_term_months} months max
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Field name="amount" label="Amount" placeholder="10000.00" required />
-              <Field name="term_months" label="Term months" placeholder="12" type="number" required />
+              <Field name="amount" label="How much do you want to borrow?" placeholder="10000.00" required />
+              <Field name="term_months" label="Over how many months?" placeholder="12" type="number" required />
               <Field name="external_lender" label="External lender" placeholder="Optional" />
               <Field name="external_reference" label="Settlement reference" placeholder="Optional" />
               <label className="block text-sm font-black text-slate-200 sm:col-span-2">
                 Purpose
-                <textarea name="purpose" required placeholder="Explain the high-interest debt or family loan need" className="mt-2 min-h-28 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none" />
+                <textarea name="purpose" required placeholder="Explain what this loan is for" className="mt-2 min-h-28 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none" />
               </label>
               <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
                 Submit request <ArrowRight className="h-4 w-4" />
@@ -367,19 +380,49 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
         </section>
 
         <section className="grid gap-6 xl:grid-cols-3">
-          <Panel title="Loan requests" subtitle="Track requests submitted for review.">
+          <Panel title="Loan requests" subtitle="Track requests and review finance-admin offers before accepting.">
             <div className="space-y-3">
               {data.loanRequests.length === 0 ? <Empty label="No loan requests yet." /> : null}
-              {data.loanRequests.map((request) => (
-                <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="font-black text-white">{formatMoney(request.requested_amount_cents)}</p>
-                    <Pill status={request.status} />
+              {data.loanRequests.map((request) => {
+                const offer = estimateOffer(request);
+                return (
+                  <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-black text-white">{formatMoney(request.requested_amount_cents)}</p>
+                        <p className="mt-1 text-xs text-slate-500">Requested over {request.requested_term_months} month{request.requested_term_months === 1 ? "" : "s"}</p>
+                      </div>
+                      <Pill status={request.status === "approved" ? "offer ready" : request.status} />
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">{request.purpose}</p>
+                    {request.status === "pending" ? <p className="mt-3 text-sm text-yellow-100">Finance admin is reviewing your request and will choose the interest rate.</p> : null}
+                    {request.status === "approved" && offer ? (
+                      <div className="mt-4 rounded-3xl border border-emerald-300/20 bg-emerald-400/10 p-4">
+                        <p className="text-sm font-black text-emerald-100">Finance approval offer</p>
+                        <div className="mt-3 grid gap-2 text-xs text-slate-200">
+                          <span>Interest rate: <strong className="text-white">{offer.rate}% annual</strong></span>
+                          <span>Method: <strong className="text-white">{offer.method}</strong></span>
+                          <span>Admin fee: <strong className="text-white">{formatMoney(request.offer_admin_fee_cents)}</strong></span>
+                          <span>Estimated repayable: <strong className="text-white">{formatMoney(offer.totalRepayable)}</strong></span>
+                          <span>Estimated monthly repayment: <strong className="text-white">{formatMoney(offer.estimatedMonthly)}</strong></span>
+                        </div>
+                        {request.review_notes ? <p className="mt-3 text-sm leading-6 text-emerald-50/80">{request.review_notes}</p> : null}
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => void acceptLoanOffer(request.id)} className="rounded-full bg-emerald-400 px-4 py-2 text-xs font-black text-slate-950">
+                            Accept offer and continue
+                          </button>
+                          <button type="button" onClick={() => void declineLoanOffer(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
+                            Decline offer
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {request.status === "active" ? <p className="mt-3 text-sm text-emerald-100">Accepted. Your loan is active and the repayment schedule is shown above.</p> : null}
+                    {request.member_decision_notes && request.status === "rejected" ? <p className="mt-3 text-sm text-slate-400">{request.member_decision_notes}</p> : null}
+                    <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">{request.purpose}</p>
-                  <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Panel>
 
@@ -442,6 +485,42 @@ function MemberDashboard({ supabase, userId }: { supabase: SupabaseClient; userI
       </div>
     </div>
   );
+}
+
+function estimateOffer(request: LoanRequestRow) {
+  if (request.offer_annual_interest_rate === null || !request.offer_interest_method) return null;
+  const rate = Number(request.offer_annual_interest_rate);
+  const term = request.requested_term_months;
+  if (!Number.isFinite(rate) || term <= 0) return null;
+
+  let totalInterest = 0;
+  if (request.offer_interest_method === "simple") {
+    totalInterest = Math.round(request.requested_amount_cents * (rate / 100) * (term / 12));
+  } else {
+    const monthlyRate = rate / 100 / 12;
+    const basePrincipal = Math.floor(request.requested_amount_cents / term);
+    let principalRemainder = request.requested_amount_cents - basePrincipal * term;
+    let remainingPrincipal = request.requested_amount_cents;
+
+    for (let installment = 1; installment <= term; installment += 1) {
+      let principal = basePrincipal + (principalRemainder > 0 ? 1 : 0);
+      if (principalRemainder > 0) principalRemainder -= 1;
+      if (installment === term) principal = remainingPrincipal;
+      totalInterest += Math.round(remainingPrincipal * monthlyRate);
+      remainingPrincipal = Math.max(0, remainingPrincipal - principal);
+    }
+  }
+
+  const adminFee = request.offer_admin_fee_cents ?? 0;
+  const totalRepayable = request.requested_amount_cents + totalInterest + adminFee;
+
+  return {
+    rate,
+    method: request.offer_interest_method.replace("_", " "),
+    totalInterest,
+    totalRepayable,
+    estimatedMonthly: Math.ceil(totalRepayable / term),
+  };
 }
 
 function MetricCard({ icon: Icon, label, value, detail }: { icon: typeof WalletCards; label: string; value: string; detail: string }) {

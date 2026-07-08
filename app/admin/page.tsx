@@ -24,7 +24,6 @@ import {
   formatMoney,
   type InterestEarningRow,
   type LoanInterestMethod,
-  type LoanProductRow,
   type LoanRequestRow,
   type LoanRow,
   type MemberRow,
@@ -44,7 +43,6 @@ type AdminData = {
   interestEarnings: InterestEarningRow[];
   transactions: TransactionRow[];
   loanRequests: LoanRequestRow[];
-  loanProducts: LoanProductRow[];
   loans: LoanRow[];
   schedules: ScheduleRow[];
 };
@@ -57,7 +55,6 @@ const emptyData: AdminData = {
   interestEarnings: [],
   transactions: [],
   loanRequests: [],
-  loanProducts: [],
   loans: [],
   schedules: [],
 };
@@ -68,7 +65,7 @@ const adminSections: { id: AdminSection; label: string; hint: string }[] = [
   { id: "overview", label: "Overview", hint: "What needs attention" },
   { id: "members", label: "Members", hint: "Create, link and roles" },
   { id: "money", label: "Money", hint: "Contributions and repayments" },
-  { id: "loans", label: "Loans", hint: "Requests, rates and products" },
+  { id: "loans", label: "Loans", hint: "Requests and custom offers" },
   { id: "ledger", label: "Ledger", hint: "Recent transactions" },
 ];
 
@@ -95,7 +92,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     setLoading(true);
     setError(null);
 
-    const [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loanProducts, loans, schedules] = await Promise.all([
+    const [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loans, schedules] = await Promise.all([
       supabase.from("users").select("id,email,full_name,role,mfa_enabled").order("created_at", { ascending: true }).returns<DgbProfile[]>(),
       supabase.from("members").select("*").order("created_at", { ascending: false }).returns<MemberRow[]>(),
       supabase.from("accounts").select("*").order("created_at", { ascending: false }).returns<AccountRow[]>(),
@@ -103,12 +100,11 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       supabase.from("member_interest_earnings").select("*").returns<InterestEarningRow[]>(),
       supabase.from("transactions").select("*").order("captured_at", { ascending: false }).limit(75).returns<TransactionRow[]>(),
       supabase.from("loan_requests").select("*").order("submitted_at", { ascending: false }).limit(75).returns<LoanRequestRow[]>(),
-      supabase.from("loan_products").select("*").order("name").returns<LoanProductRow[]>(),
       supabase.from("loans").select("*").order("created_at", { ascending: false }).limit(75).returns<LoanRow[]>(),
       supabase.from("repayment_schedules").select("*").order("due_date", { ascending: true }).limit(250).returns<ScheduleRow[]>(),
     ]);
 
-    const failed = [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loanProducts, loans, schedules].find((result) => result.error);
+    const failed = [users, members, accounts, balances, interestEarnings, transactions, loanRequests, loans, schedules].find((result) => result.error);
     if (failed?.error) {
       setError(failed.error.message);
       setLoading(false);
@@ -123,7 +119,6 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       interestEarnings: interestEarnings.data ?? [],
       transactions: transactions.data ?? [],
       loanRequests: loanRequests.data ?? [],
-      loanProducts: loanProducts.data ?? [],
       loans: loans.data ?? [],
       schedules: schedules.data ?? [],
     });
@@ -293,63 +288,24 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
     await loadData();
   }
 
-  async function upsertLoanProduct(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage(null);
-    setError(null);
-    const form = new FormData(event.currentTarget);
-    const productId = String(form.get("product_id") ?? "");
-    const name = String(form.get("name") ?? "").trim();
-    const annualRate = parsePercent(form.get("annual_interest_rate"));
-    const interestMethod = String(form.get("interest_method") ?? "reducing_balance") as LoanInterestMethod;
-    const maxTermMonths = Number(form.get("max_term_months"));
-    const adminFeeCents = parseMoneyToCents(form.get("admin_fee")) ?? 0;
-    const penaltyRate = parsePercent(form.get("penalty_rate")) ?? 0;
-    const active = form.get("active") === "on";
-
-    if (!name || annualRate === null || !Number.isFinite(maxTermMonths) || maxTermMonths <= 0) {
-      setError("Product name, annual interest rate and maximum term are required.");
-      return;
-    }
-
-    const { error: rpcError } = await supabase.rpc("upsert_loan_product", {
-      p_product_id: productId || null,
-      p_name: name,
-      p_annual_interest_rate: annualRate,
-      p_interest_method: interestMethod,
-      p_max_term_months: maxTermMonths,
-      p_admin_fee_cents: adminFeeCents,
-      p_penalty_rate: penaltyRate,
-      p_active: active,
-    });
-
-    if (rpcError) {
-      setError(rpcError.message);
-      return;
-    }
-
-    event.currentTarget.reset();
-    setMessage(productId ? "Loan product and rate updated." : "Loan product and rate created.");
-    await loadData();
-  }
-
   async function approveLoanRequest(event: React.FormEvent<HTMLFormElement>, request: LoanRequestRow) {
     event.preventDefault();
     setMessage(null);
     setError(null);
     const form = new FormData(event.currentTarget);
     const account = data.accounts.find((item) => item.member_id === request.member_id && item.status === "active");
-    const product = data.loanProducts.find((item) => item.id === request.loan_product_id);
     const annualRate = parsePercent(form.get("annual_interest_rate"));
+    const interestMethod = String(form.get("interest_method") ?? "reducing_balance") as LoanInterestMethod;
     const adminFeeCents = parseMoneyToCents(form.get("admin_fee")) ?? 0;
+    const notes = String(form.get("notes") ?? "").trim();
 
     if (!account) {
       setError("This member needs an active wallet account before the loan can be approved.");
       return;
     }
 
-    if (!product || annualRate === null) {
-      setError("Choose a valid loan product and interest rate before approval.");
+    if (annualRate === null) {
+      setError("Enter the annual interest rate you want to offer this member.");
       return;
     }
 
@@ -358,9 +314,9 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       p_account_id: account.id,
       p_reference: `DGB-LOAN-${request.id.slice(0, 8).toUpperCase()}`,
       p_start_date: new Date().toISOString().slice(0, 10),
-      p_notes: "Approved from DGB admin dashboard.",
+      p_notes: notes || "Finance admin approved a custom loan offer.",
       p_annual_interest_rate: annualRate,
-      p_interest_method: product.interest_method,
+      p_interest_method: interestMethod,
       p_admin_fee_cents: adminFeeCents,
     });
 
@@ -369,7 +325,7 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
       return;
     }
 
-    setMessage(`Loan request approved at ${annualRate}% annual interest. Principal left the pooled cash and future interest will be distributed by member pool share.`);
+    setMessage(`Loan offer sent at ${annualRate}% annual interest. No money leaves the pool until the member accepts it.`);
     await loadData();
   }
 
@@ -782,121 +738,81 @@ function AdminDashboard({ supabase, profile }: { supabase: SupabaseClient; profi
 
         {activeSection === "loans" ? (
           <div className="space-y-5">
-            <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
-              <Panel title="Loan requests" subtitle="Review borrower requests. Approval takes principal from pooled cash and shares future interest.">
-                <div className="space-y-3">
-                  {data.loanRequests.length === 0 ? <Empty label="No loan requests yet." /> : null}
-                  {data.loanRequests.map((request) => {
-                    const product = data.loanProducts.find((item) => item.id === request.loan_product_id);
-                    return (
-                      <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="font-black text-white">{memberName(request.member_id, data.members)}</p>
-                            <p className="mt-1 text-sm text-slate-400">
-                              {formatMoney(request.requested_amount_cents)} over {request.requested_term_months} months
-                              {product ? ` · ${product.name} @ ${product.annual_interest_rate}%` : ""}
-                            </p>
-                          </div>
-                          <Pill status={request.status} />
-                        </div>
-                        <p className="mt-3 text-sm leading-6 text-slate-300">{request.purpose}</p>
-                        <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
-                        {request.status === "pending" ? (
-                          <div className="mt-4 space-y-3">
-                            <form onSubmit={(event) => approveLoanRequest(event, request)} className="grid gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-3 sm:grid-cols-2">
-                              <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
-                                Annual rate %
-                                <input
-                                  name="annual_interest_rate"
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  required
-                                  defaultValue={product?.annual_interest_rate ?? 0}
-                                  className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
-                                />
-                              </label>
-                              <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
-                                Admin fee
-                                <input
-                                  name="admin_fee"
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  defaultValue={product ? Number(product.admin_fee_cents) / 100 : 0}
-                                  className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
-                                />
-                              </label>
-                              <button type="submit" className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100 sm:col-span-2">
-                                Approve loan
-                              </button>
-                            </form>
-                            <button type="button" onClick={() => rejectLoanRequest(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
-                              Reject request
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              </Panel>
-
-              <Panel title="Loan products and rates" subtitle="Set default loan rates, fees and terms.">
-                <form onSubmit={upsertLoanProduct} className="grid gap-3 sm:grid-cols-2">
-                  <label className="block text-sm font-black text-slate-200 sm:col-span-2">
-                    Existing product
-                    <select name="product_id" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                      <option value="">Create new product / update by name</option>
-                      {data.loanProducts.map((product) => (
-                        <option key={product.id} value={product.id} className="bg-slate-950">
-                          {product.name} · {product.annual_interest_rate}% · {product.max_term_months} months · {product.active ? "active" : "inactive"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <Field name="name" label="Product name" placeholder="Family Relief" required />
-                  <Field name="annual_interest_rate" label="Annual interest rate %" placeholder="12" required />
-                  <label className="block text-sm font-black text-slate-200">
-                    Interest method
-                    <select name="interest_method" required defaultValue="reducing_balance" className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none">
-                      <option value="reducing_balance" className="bg-slate-950">Reducing balance</option>
-                      <option value="simple" className="bg-slate-950">Simple</option>
-                    </select>
-                  </label>
-                  <Field name="max_term_months" label="Max term months" placeholder="24" type="number" required />
-                  <Field name="admin_fee" label="Admin fee" placeholder="250.00" />
-                  <Field name="penalty_rate" label="Penalty rate %" placeholder="2" />
-                  <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-black text-slate-200">
-                    <input name="active" type="checkbox" defaultChecked className="h-4 w-4 accent-emerald-400" /> Active product
-                  </label>
-                  <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-black text-slate-950 sm:col-span-2" type="submit">
-                    <Percent className="h-4 w-4" /> Save product rate
-                  </button>
-                </form>
-              </Panel>
-            </section>
-
-            <Panel title="Current lending products" subtitle="These are the loan options members see when requesting finance.">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {data.loanProducts.map((product) => (
-                  <div key={product.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
+            <Panel title="Loan requests" subtitle="Members request only amount and repayment period. You choose the custom interest offer; money moves only after the member accepts.">
+              <div className="space-y-3">
+                {data.loanRequests.length === 0 ? <Empty label="No loan requests yet." /> : null}
+                {data.loanRequests.map((request) => (
+                  <div key={request.id} className="rounded-3xl border border-white/10 bg-black/15 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="font-black text-white">{product.name}</p>
-                        <p className="mt-1 text-sm text-slate-400">{product.interest_method.replace("_", " ")} · max {product.max_term_months} months</p>
+                        <p className="font-black text-white">{memberName(request.member_id, data.members)}</p>
+                        <p className="mt-1 text-sm text-slate-400">
+                          Wants {formatMoney(request.requested_amount_cents)} over {request.requested_term_months} month{request.requested_term_months === 1 ? "" : "s"}
+                        </p>
                       </div>
-                      <Pill status={product.active ? "active" : "inactive"} />
+                      <Pill status={request.status === "approved" ? "offer sent" : request.status} />
                     </div>
-                    <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-slate-400">
-                      <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.annual_interest_rate}%</span>Interest</div>
-                      <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{formatMoney(product.admin_fee_cents)}</span>Admin fee</div>
-                      <div className="rounded-2xl bg-white/[0.06] p-3"><span className="block font-black text-white">{product.penalty_rate}%</span>Penalty</div>
-                    </div>
+                    <p className="mt-3 text-sm leading-6 text-slate-300">{request.purpose}</p>
+                    <p className="mt-2 text-xs text-slate-500">Submitted {shortDate(request.submitted_at)}</p>
+                    {request.status === "pending" ? (
+                      <div className="mt-4 space-y-3">
+                        <form onSubmit={(event) => approveLoanRequest(event, request)} className="grid gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-400/5 p-3 sm:grid-cols-2">
+                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
+                            Offer annual rate %
+                            <input
+                              name="annual_interest_rate"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              required
+                              placeholder="12"
+                              className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
+                            />
+                          </label>
+                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
+                            Interest method
+                            <select name="interest_method" required defaultValue="reducing_balance" className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none">
+                              <option value="reducing_balance" className="bg-slate-950">Reducing balance</option>
+                              <option value="simple" className="bg-slate-950">Simple</option>
+                            </select>
+                          </label>
+                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100">
+                            Admin fee
+                            <input
+                              name="admin_fee"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder="0.00"
+                              className="mt-2 h-10 w-full rounded-2xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none"
+                            />
+                          </label>
+                          <label className="block text-xs font-black uppercase tracking-[0.16em] text-emerald-100 sm:col-span-2">
+                            Notes shown to member
+                            <textarea name="notes" placeholder="Explain the approved interest rate or any conditions" className="mt-2 min-h-20 w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none" />
+                          </label>
+                          <button type="submit" className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-xs font-black text-emerald-100 sm:col-span-2">
+                            Send approval offer
+                          </button>
+                        </form>
+                        <button type="button" onClick={() => rejectLoanRequest(request.id)} className="rounded-full border border-rose-300/25 bg-rose-400/10 px-4 py-2 text-xs font-black text-rose-100">
+                          Reject request
+                        </button>
+                      </div>
+                    ) : null}
+                    {request.status === "approved" ? (
+                      <div className="mt-4 rounded-3xl border border-yellow-300/20 bg-yellow-300/10 p-4 text-sm text-yellow-50">
+                        <p className="font-black">Offer sent — waiting for member acceptance</p>
+                        <p className="mt-2">
+                          {request.offer_annual_interest_rate}% annual · {request.offer_interest_method?.replace("_", " ") ?? "method pending"} · admin fee {formatMoney(request.offer_admin_fee_cents)}
+                        </p>
+                        {request.review_notes ? <p className="mt-2 text-yellow-50/80">{request.review_notes}</p> : null}
+                      </div>
+                    ) : null}
+                    {request.status === "active" ? <p className="mt-3 text-sm text-emerald-100">Accepted by member. Loan and repayment schedule are active.</p> : null}
+                    {request.member_decision_notes && request.status === "rejected" ? <p className="mt-3 text-sm text-slate-400">{request.member_decision_notes}</p> : null}
                   </div>
                 ))}
-                {data.loanProducts.length === 0 ? <Empty label="No loan products yet." /> : null}
               </div>
             </Panel>
           </div>
